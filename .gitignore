@@ -1,0 +1,26 @@
+# Cloned third-party rPPG repos (their own git, not part of this project)
+Research/open-rppg/
+Research/yarppg/
+
+# Design pipeline artifacts (Claude Design output + the prompts that generated it)
+Wise/
+Wise.zip
+CLAUDE-DESIGN-PROMPT.md
+CLAUDE-DESIGN-PROMPT-v2.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+.env.local
+
+# App runtime
+app/uploads/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
