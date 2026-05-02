@@ -177,10 +177,11 @@ function Header() {
 /* ============================================================
    v2 — Sample-first hero player
    ============================================================ */
-// Public-domain face video (Pexels — Polina Tankilevitch).
-// Looped on play; muted so autoplay-on-tap is allowed.
-// NOTE: Clicking "Analyze sample →" calls the real /api/analyze/sample endpoint.
-const SAMPLE_VIDEO_URL = "https://videos.pexels.com/video-files/3771610/3771610-uhd_2560_1440_25fps.mp4";
+// Bundled sample face video (VitalLens, MIT license — see CREDITS.md).
+// Same file the backend analyzes when "Analyze sample →" is clicked, so the
+// preview the user plays is exactly what gets processed. Same-origin → no
+// CORS / hotlink issues, and ~1 MB so it loads instantly.
+const SAMPLE_VIDEO_URL = "/static/samples/sample-face-60s.mp4";
 
 function SampleHero({ onAnalyze, onPickFile, onRecord }) {
   const videoRef = useRef(null);
