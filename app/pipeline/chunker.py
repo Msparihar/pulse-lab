@@ -5,18 +5,19 @@ Pipeline:
   1. Decode the uploaded video, resample to 30 fps via frame-index selection.
   2. Slice into 12 disjoint 5-second windows (150 frames each).
   3. For each window, call open-rppg's process_video_tensor → BPM + SQI + latency.
+     Also capture per-chunk HRV bundle and BVP segment.
      Yield a chunk SSE event the moment each window finishes.
-  4. After all chunks, do a whole-video pass for the canonical overall BPM,
-     full HRV bundle (incl. respiratory rate), and the BVP waveform that the
-     frozen-waveform component renders on the results screen.
-  5. Compute a 95% CI on the overall from per-chunk BPM variance.
-  6. Yield a final SSE event with everything.
+  4. Aggregate per-chunk results: SQI-weighted median BPM, averaged HRV, concat BVP tail.
+  5. Yield a final SSE event with everything.
 
 Why this shape:
   - Per-chunk BPMs feed the timeline UI in near-real-time (the "live" feel).
-  - The whole-video pass is more accurate for the headline number — longer
-    signal, better HRV stats. Source: chunked-rppg-best-practices.md.
+  - Dropping the whole-video pass cuts total pipeline time from ~50s to ~10-15s.
+    The whole-video pass was ~30-40s of dead air at the end; eliminating it means
+    the final event lands within ~1s of the last chunk.
   - SQI threshold 0.293 marks a chunk as "failed" (validated in literature).
+  - HRV is averaged across valid chunks that produced it (SQI > 0.5 per library).
+  - BVP for the frozen waveform is the tail of concatenated per-chunk signals.
   - All blocking work runs on a thread executor; the SSE event loop stays free.
 """
 import asyncio
@@ -99,11 +100,12 @@ def _slice_into_chunks(frames: np.ndarray) -> list[np.ndarray]:
 def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
     """Run inference on one chunk. Returns a dict with bpm/quality/latency
     plus a `failed` boolean and (when failed) a human-readable reason that
-    the UI tooltip can show."""
+    the UI tooltip can show. Also captures per-chunk HRV and BVP."""
     if len(chunk) < MIN_FRAMES_FOR_INFERENCE:
         return {
             "bpm": None, "quality": None, "latency_ms": 0,
             "failed": True, "reason": "too short",
+            "hrv": {}, "bvp_samples": [],
         }
 
     t0 = time.perf_counter()
@@ -114,13 +116,29 @@ def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
             "bpm": None, "quality": None,
             "latency_ms": int((time.perf_counter() - t0) * 1000),
             "failed": True, "reason": f"{type(e).__name__}",
+            "hrv": {}, "bvp_samples": [],
         }
     latency_ms = int((time.perf_counter() - t0) * 1000)
+
+    # Capture the BVP segment for this chunk immediately after inference.
+    # model.bvp() returns a cumulative buffer — slice the last FRAMES_PER_CHUNK
+    # samples (150 at 30Hz = 5s) to get this chunk's contribution only.
+    bvp_samples: list[float] = []
+    try:
+        bvp_arr, _ts = model.bvp()
+        if bvp_arr is not None:
+            arr = np.asarray(bvp_arr, dtype=np.float64)
+            if arr.size > 0:
+                chunk_bvp = arr[-FRAMES_PER_CHUNK:]
+                bvp_samples = [float(x) for x in chunk_bvp]
+    except Exception:
+        pass
 
     if not result or result.get("hr") is None:
         return {
             "bpm": None, "quality": None, "latency_ms": latency_ms,
             "failed": True, "reason": "no signal",
+            "hrv": {}, "bvp_samples": bvp_samples,
         }
 
     sqi = float(result.get("SQI") or 0.0)
@@ -128,7 +146,10 @@ def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
         return {
             "bpm": None, "quality": round(sqi, 3), "latency_ms": latency_ms,
             "failed": True, "reason": "signal too noisy",
+            "hrv": {}, "bvp_samples": bvp_samples,
         }
+
+    hrv = result.get("hrv") or {}
 
     return {
         "bpm": int(round(float(result["hr"]))),
@@ -136,86 +157,83 @@ def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
         "latency_ms": latency_ms,
         "failed": False,
         "reason": None,
+        "hrv": hrv if isinstance(hrv, dict) else {},
+        "bvp_samples": bvp_samples,
     }
 
 
-def _aggregate_overall(
-    chunk_results: list[dict],
-    whole_video_result: dict | None,
-) -> dict:
-    """Compute the final summary.
+def _aggregate_overall(chunk_results: list[dict]) -> dict:
+    """Compute the final summary from per-chunk data only.
 
-    overall_bpm: prefer the whole-video pass (longer signal = better stats).
-                 Fall back to SQI-weighted median across chunks if the whole-video
-                 pass returned None.
-    ci:          half-width of a 95% CI from the spread of valid per-chunk BPMs.
-    hrv:         from the whole-video pass; empty if SQI was too low.
+    overall_bpm: SQI-weighted median across valid chunks.
+    ci:          half-width of 95% CI from per-chunk BPM spread.
+    hrv:         averaged across valid chunks that produced HRV (SQI > 0.5).
+    bvp:         tail of concatenated per-chunk BVP signals, normalized to [-1,1].
     """
     valid = [c for c in chunk_results if not c["failed"]]
     bpms = [c["bpm"] for c in valid]
 
-    if whole_video_result and whole_video_result.get("hr") is not None:
-        overall_bpm = int(round(float(whole_video_result["hr"])))
-        hrv = whole_video_result.get("hrv") or {}
-    elif bpms:
-        weights = np.array([c["quality"] for c in valid], dtype=np.float64)
-        bpms_arr = np.array(bpms, dtype=np.float64)
-        order = np.argsort(bpms_arr)
-        sorted_bpms = bpms_arr[order]
-        sorted_w = weights[order]
-        cumw = np.cumsum(sorted_w)
-        cutoff = cumw[-1] / 2
-        idx = int(np.searchsorted(cumw, cutoff))
-        idx = min(idx, len(sorted_bpms) - 1)
-        overall_bpm = int(round(float(sorted_bpms[idx])))
-        hrv = {}
-    else:
-        overall_bpm = None
-        hrv = {}
+    if not bpms:
+        return {
+            "overall_bpm": None,
+            "ci": None,
+            "respiratory_rate": None,
+            "hrv": {"rmssd": None, "sdnn": None, "pnn50": None, "lf_hf": None},
+            "bvp": [],
+        }
 
-    if len(bpms) >= 3:
-        std = float(np.std(bpms, ddof=1))
-        ci = int(round(1.96 * std / np.sqrt(len(bpms))))
-    else:
-        ci = None
+    # SQI-weighted median for overall BPM
+    weights = np.array([c["quality"] for c in valid], dtype=np.float64)
+    bpms_arr = np.array(bpms, dtype=np.float64)
+    order = np.argsort(bpms_arr)
+    sorted_bpms = bpms_arr[order]
+    sorted_w = weights[order]
+    cumw = np.cumsum(sorted_w)
+    cutoff = cumw[-1] / 2
+    idx = min(int(np.searchsorted(cumw, cutoff)), len(sorted_bpms) - 1)
+    overall_bpm = int(round(float(sorted_bpms[idx])))
 
-    rr_raw = hrv.get("breathingrate") if isinstance(hrv, dict) else None
-    rr_val = float(rr_raw) if rr_raw is not None else None
+    # CI from chunk BPM std
+    ci = int(round(1.96 * float(np.std(bpms, ddof=1)) / np.sqrt(len(bpms)))) if len(bpms) >= 3 else None
 
-    def _round_or_none(v, digits):
-        return round(float(v), digits) if v is not None else None
+    # HRV: average per-chunk bundles across valid chunks that produced HRV.
+    # The library only populates hrv when SQI > 0.5, so some chunks may not contribute.
+    hrv_chunks = [c["hrv"] for c in valid if c.get("hrv")]
+
+    def _avg(key: str, digits: int = 1):
+        vals = [float(h[key]) for h in hrv_chunks if h.get(key) is not None]
+        # Drop NaN values that the library may return for HRV metrics
+        vals = [v for v in vals if not (v != v)]  # NaN != NaN
+        return round(sum(vals) / len(vals), digits) if vals else None
+
+    hrv = {
+        "rmssd": _avg("rmssd", 1),
+        "sdnn":  _avg("sdnn", 1),
+        "pnn50": _avg("pnn50", 1),
+        "lf_hf": _avg("LF/HF", 2),
+    }
+
+    rr_raw = _avg("breathingrate", 1)
+    rr = int(round(rr_raw)) if (rr_raw is not None and rr_raw == rr_raw) else None
+
+    # BVP for the frozen waveform: concat per-chunk BVPs, take the tail.
+    all_samples: list[float] = []
+    for c in valid:
+        all_samples.extend(c.get("bvp_samples") or [])
+
+    bvp_tail = all_samples[-BVP_TAIL_SAMPLES:]
+    if bvp_tail:
+        lo = min(bvp_tail)
+        rng = max(bvp_tail) - lo or 1.0
+        bvp_tail = [round(2 * (v - lo) / rng - 1, 4) for v in bvp_tail]
 
     return {
         "overall_bpm": overall_bpm,
         "ci": ci,
-        "respiratory_rate": int(round(rr_val)) if rr_val else None,
-        "hrv": {
-            "rmssd": _round_or_none(hrv.get("rmssd"), 1) if isinstance(hrv, dict) else None,
-            "sdnn":  _round_or_none(hrv.get("sdnn"),  1) if isinstance(hrv, dict) else None,
-            "pnn50": _round_or_none(hrv.get("pnn50"), 1) if isinstance(hrv, dict) else None,
-            "lf_hf": _round_or_none(hrv.get("LF/HF"), 2) if isinstance(hrv, dict) else None,
-        },
+        "respiratory_rate": rr,
+        "hrv": hrv,
+        "bvp": bvp_tail,
     }
-
-
-def _bvp_tail(model) -> list[float]:
-    """Pull the tail of the most-recent BVP signal for the frozen waveform.
-    The frontend renders this as the static ECG-style line on the results card.
-    """
-    try:
-        bvp, _ts = model.bvp()
-    except Exception:
-        return []
-    if bvp is None:
-        return []
-    arr = np.asarray(bvp, dtype=np.float64)
-    if arr.size == 0:
-        return []
-    # Normalize to roughly [-1, 1] so the frontend can render without rescaling
-    rng = float(arr.max() - arr.min()) or 1.0
-    arr = 2 * (arr - arr.min()) / rng - 1
-    tail = arr[-BVP_TAIL_SAMPLES:]
-    return [round(float(x), 4) for x in tail]
 
 
 async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
@@ -229,6 +247,8 @@ async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
     for i, chunk in enumerate(chunks):
         result = await asyncio.to_thread(_process_chunk_sync, model, chunk)
         chunk_results.append(result)
+        # Strip the heavy bvp_samples + hrv from the streamed event payload —
+        # frontend only needs the fields below for the live timeline UI.
         yield {
             "type": "chunk",
             "idx": i,
@@ -239,13 +259,7 @@ async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
             "reason": result["reason"],
         }
 
-    try:
-        whole_result = await asyncio.to_thread(model.process_video, str(video_path))
-    except Exception:
-        whole_result = None
-
-    bvp_tail = await asyncio.to_thread(_bvp_tail, model)
-    summary = _aggregate_overall(chunk_results, whole_result)
+    summary = _aggregate_overall(chunk_results)
 
     total_seconds = time.perf_counter() - pipeline_t0
     valid_latencies = [c["latency_ms"] for c in chunk_results if not c["failed"]]
@@ -260,7 +274,7 @@ async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
         "ci": summary["ci"],
         "respiratory_rate": summary["respiratory_rate"],
         "hrv": summary["hrv"],
-        "bvp": bvp_tail,
+        "bvp": summary["bvp"],
         "perf": {
             "total_seconds": round(total_seconds, 1),
             "avg_chunk_seconds": round(avg_chunk_seconds, 1),
