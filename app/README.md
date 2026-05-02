@@ -50,3 +50,16 @@ STUB_MODE=1 uv run python main.py
   "perf": {"total_seconds": 18.0, "avg_chunk_seconds": 1.5, "frames_processed": 1800}
 }
 ```
+
+## Deploy (Docker)
+
+The app ships with a multi-stage Dockerfile. Build locally:
+
+```
+docker build -t pulse-lab app/
+docker run -p 8000:8000 pulse-lab
+```
+
+First boot loads the rPPG model and warms up JAX (~5–10s) before serving
+the first request. Health endpoint at `/healthz` returns `{"status":"ok"}`
+once ready.

@@ -1,0 +1,21 @@
+# Virtual environment — rebuilt inside the Docker build
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data — not part of the image
+uploads/
+
+# Docs
+*.md
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Node (defensive — none should exist here)
+node_modules/

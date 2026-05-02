@@ -1,0 +1,13 @@
+# Design artifacts and research clones — not needed in the build context
+Wise/
+Wise.zip
+Research/open-rppg/
+Research/yarppg/
+
+# Design prompt docs
+CLAUDE-DESIGN-PROMPT*.md
+
+# Git
+.git
+.gitignore
+.gitattributes
