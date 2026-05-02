@@ -10,8 +10,8 @@ dependencies = [
     "open-rppg>=0.1",
     "opencv-python>=4.5",
     "numpy>=1.24",
-    # open-rppg imports pkg_resources at runtime but doesn't declare setuptools
-    # as a dependency. uv sync into a clean venv leaves it out and the app
-    # crashes at startup with ModuleNotFoundError. Pin it here as a workaround.
-    "setuptools>=70.0",
+    # open-rppg imports pkg_resources at runtime to locate its bundled model
+    # weights. pkg_resources lives inside setuptools, but setuptools 81 dropped
+    # the module — so we have to pin to the last major that still ships it.
+    "setuptools>=70.0,<81",
 ]

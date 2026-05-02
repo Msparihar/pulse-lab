@@ -13,11 +13,10 @@ RUN pip install --no-cache-dir uv
 # Copy dependency manifest only (cache this layer)
 COPY pyproject.toml ./
 
-# Sync deps into .venv. open-rppg imports pkg_resources at runtime, so we
-# install setuptools explicitly afterwards to guarantee it's in the venv even
-# if a transitive resolution skips it.
-RUN uv sync --no-dev \
-    && /app/.venv/bin/pip install --no-cache-dir setuptools
+# Sync deps into .venv. setuptools is listed in pyproject.toml because
+# open-rppg imports pkg_resources at runtime; the smoke check in the runtime
+# stage fails the build if it ever goes missing.
+RUN uv sync --no-dev
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
