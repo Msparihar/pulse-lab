@@ -34,28 +34,8 @@ function App() {
   // Clean up SSE on unmount
   useEffect(() => () => { esRef.current?.close(); }, []);
 
-  /* --------- Real streaming --------- */
-  const startStreaming = useCallback(async (uploadFile) => {
-    setView("processing");
-    setChunks(buildInitialChunks().map((c, i) => i === 0 ? { ...c, status: "active" } : c));
-    setCurrentIdx(0);
-    setFinal(null);
-
-    // 1. Upload the file
-    let job_id;
-    try {
-      const fd = new FormData();
-      fd.append("file", uploadFile);
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-      ({ job_id } = await res.json());
-    } catch (err) {
-      console.error("[rPPG] upload error", err);
-      setView("failure");
-      return;
-    }
-
-    // 2. Open SSE stream
+  /* --------- SSE machinery (shared by upload and sample paths) --------- */
+  const openStream = useCallback((job_id) => {
     const es = new EventSource(`/api/analyze/${job_id}/stream`);
     esRef.current = es;
 
@@ -99,6 +79,31 @@ function App() {
     };
   }, []);
 
+  /* --------- Real streaming (upload path) --------- */
+  const startStreaming = useCallback(async (uploadFile) => {
+    setView("processing");
+    setChunks(buildInitialChunks().map((c, i) => i === 0 ? { ...c, status: "active" } : c));
+    setCurrentIdx(0);
+    setFinal(null);
+
+    // 1. Upload the file
+    let job_id;
+    try {
+      const fd = new FormData();
+      fd.append("file", uploadFile);
+      const res = await fetch("/api/analyze", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      ({ job_id } = await res.json());
+    } catch (err) {
+      console.error("[rPPG] upload error", err);
+      setView("failure");
+      return;
+    }
+
+    // 2. Open SSE stream
+    openStream(job_id);
+  }, [openStream]);
+
   /* --------- Derived: running average (SQI-weighted) --------- */
   const runningAvg = useMemo(() => {
     const valid = chunks.filter(c => c.status === "done");
@@ -130,7 +135,27 @@ function App() {
   /* --------- Handlers --------- */
   const onPickFile = (f) => setFile(f); // f is a real File object
 
-  const onPickSample = () => setFile({ name: "sample-face-60s.mp4", size: 6.4 * 1024 * 1024 });
+  const onPickSample = useCallback(async () => {
+    setView("processing");
+    setChunks(buildInitialChunks().map((c, i) => i === 0 ? { ...c, status: "active" } : c));
+    setCurrentIdx(0);
+    setFinal(null);
+    setFile({ name: "sample-face-60s.mp4", size: 1.1 * 1024 * 1024 });
+
+    let job_id;
+    try {
+      const res = await fetch("/api/analyze/sample", { method: "POST" });
+      if (!res.ok) throw new Error(`Sample request failed: ${res.status}`);
+      ({ job_id } = await res.json());
+    } catch (err) {
+      console.error("[rPPG] sample error", err);
+      setView("failure");
+      return;
+    }
+
+    // Reuse the same SSE machinery as the upload path
+    openStream(job_id);
+  }, [openStream]);
 
   const onStart = () => {
     if (!file) return;
@@ -213,7 +238,7 @@ function App() {
       {view === "failure" && (
         <WholeFailure
           onRetry={onReset}
-          onSample={() => { onPickSample(); setView("upload"); }}
+          onSample={onPickSample}
         />
       )}
     </div>

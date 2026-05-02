@@ -7,6 +7,7 @@ Set STUB_MODE=1 to skip model loading and emit deterministic fake data instead
 """
 import json
 import os
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -86,6 +87,21 @@ async def analyze(file: UploadFile):
     dest = UPLOADS_DIR / f"{job_id}{suffix}"
     contents = await file.read()
     dest.write_bytes(contents)
+    app.state.jobs[job_id] = dest
+    return {"job_id": job_id}
+
+
+@app.post("/api/analyze/sample")
+async def analyze_sample():
+    """Register the bundled sample video as a fresh job. Returns the same
+    {job_id} shape as the upload endpoint so the frontend can stream from
+    the same /api/analyze/{job_id}/stream URL."""
+    sample = STATIC_DIR / "samples" / "sample-face-60s.mp4"
+    if not sample.exists():
+        raise HTTPException(status_code=404, detail="Sample video not bundled")
+    job_id = str(uuid.uuid4())
+    dest = UPLOADS_DIR / f"{job_id}.mp4"
+    shutil.copyfile(sample, dest)
     app.state.jobs[job_id] = dest
     return {"job_id": job_id}
 
