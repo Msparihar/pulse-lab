@@ -372,32 +372,42 @@ function WebcamCapture({ onComplete }) {
   const chunksRef = useRef([]);
   const tickRef = useRef(null);
 
-  const [camError, setCamError] = useState(null);
+  // camState: "pending" | "denied" | "ready"
+  const [camState, setCamState] = useState("pending");
+  const [camErrorMsg, setCamErrorMsg] = useState("");
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0); // 0..60s
 
   // Chips are cosmetic for now — hardcoded to "good"
   const chips = { lighting: "good", face: "centered", motion: "low" };
 
-  // Start camera on mount
-  useEffect(() => {
-    let active = true;
+  const requestCamera = useCallback(() => {
+    setCamState("pending");
+    setCamErrorMsg("");
     navigator.mediaDevices
       .getUserMedia({ video: { width: 1280, height: 720, facingMode: "user" } })
       .then((stream) => {
-        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
+        setCamState("ready");
       })
       .catch((err) => {
-        if (!active) return;
-        console.error("[WebcamCapture] getUserMedia failed", err);
-        setCamError("Camera access denied or unavailable.");
+        const isDenied = err.name === "NotAllowedError" || err.name === "PermissionDeniedError";
+        setCamErrorMsg(
+          isDenied
+            ? "Camera access was denied. Allow camera access in your browser and try again."
+            : `Camera unavailable: ${err.message}`
+        );
+        setCamState("denied");
       });
+  }, []);
+
+  // Start camera on mount
+  useEffect(() => {
+    requestCamera();
     return () => {
-      active = false;
       if (tickRef.current) clearInterval(tickRef.current);
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         recorderRef.current.stop();
@@ -447,14 +457,8 @@ function WebcamCapture({ onComplete }) {
     }, 100);
   }, [onComplete]);
 
-  const stopRecording = useCallback(() => {
-    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
-    }
-    setRecording(false);
-    setElapsed(0);
-  }, []);
+  // No manual stop — recording auto-stops at 60s for guaranteed duration.
+  // The button is disabled until 60s elapses (or auto-completes).
 
   const ringR = 36;
   const ringC = 2 * Math.PI * ringR;
@@ -466,28 +470,55 @@ function WebcamCapture({ onComplete }) {
     return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   };
 
+  // --- Permission pending state ---
+  if (camState === "pending") {
+    return (
+      <div>
+        <div className="webcam webcam-permission">
+          <div className="webcam-permission-content">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)", opacity: 0.85 }}>
+              <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+            </svg>
+            <p>Allow camera access in your browser to start recording.</p>
+          </div>
+        </div>
+        <div className="webcam-chips">
+          <span style={{ fontSize: 12, color: "var(--text-subtle)", fontFamily: "var(--font-mono)" }}>waiting for permission…</span>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Permission denied state ---
+  if (camState === "denied") {
+    return (
+      <div>
+        <div className="webcam webcam-permission">
+          <div className="webcam-permission-content">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-muted)" }}>
+              <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+            </svg>
+            <p style={{ color: "var(--text-muted)" }}>{camErrorMsg}</p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+              <button className="btn btn-secondary" style={{ fontSize: 13, padding: "8px 16px" }} onClick={requestCamera}>
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="webcam-chips">
+          <span style={{ fontSize: 12, color: "var(--text-subtle)", fontFamily: "var(--font-mono)" }}>camera unavailable</span>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Camera ready state ---
   return (
     <div>
       <div className="webcam">
         {/* Live video preview */}
         <video ref={videoRef} autoPlay muted playsInline/>
-
-        {/* Camera error overlay */}
-        {camError && (
-          <div className="webcam-error">{camError}</div>
-        )}
-
-        {/* Face ROI bbox — centered-ish */}
-        {!camError && (
-          <div style={{ position: "absolute", left: "32%", top: "16%", width: "36%", height: "62%", zIndex: 2 }}>
-            <div className="webcam-roi" style={{ position: "absolute", inset: 0 }}>
-              <span className="webcam-roi-corner tl"/>
-              <span className="webcam-roi-corner tr"/>
-              <span className="webcam-roi-corner bl"/>
-              <span className="webcam-roi-corner br"/>
-            </div>
-          </div>
-        )}
 
         {/* Countdown ring */}
         <svg className="webcam-record-ring" viewBox="0 0 80 80">
@@ -502,24 +533,18 @@ function WebcamCapture({ onComplete }) {
           )}
         </svg>
 
-        {!camError && (
-          <button
-            className={`webcam-record-btn ${recording ? "is-recording" : ""}`}
-            onClick={() => {
-              if (recording) {
-                stopRecording();
-              } else {
-                startRecording();
-              }
-            }}
-          >
-            {recording ? (
-              <span className="tabular">{fmt(60 - elapsed)}</span>
-            ) : (
-              <span className="webcam-record-btn-inner"/>
-            )}
-          </button>
-        )}
+        <button
+          className={`webcam-record-btn ${recording ? "is-recording" : ""}`}
+          onClick={() => { if (!recording) startRecording(); }}
+          disabled={recording}
+          title={recording ? `Recording — auto-stops at 60s (${fmt(60 - elapsed)} remaining)` : "Start 60-second recording"}
+        >
+          {recording ? (
+            <span className="tabular">{fmt(60 - elapsed)}</span>
+          ) : (
+            <span className="webcam-record-btn-inner"/>
+          )}
+        </button>
       </div>
 
       <div className="webcam-chips">
@@ -539,7 +564,7 @@ function WebcamCapture({ onComplete }) {
           {chips.motion}
         </span>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-subtle)", fontFamily: "var(--font-mono)" }}>
-          {recording ? "recording…" : "tap to record · 60s"}
+          {recording ? "recording… auto-stops at 60s" : "tap to record · 60s"}
         </span>
       </div>
     </div>
@@ -899,7 +924,7 @@ function ProcessingView({ file, chunks, runningAvg, currentIdx, total, onCancel,
             ? <>Currently processing chunk <span className="tabular">{currentIdx + 1}</span> of <span className="tabular">{total}</span></>
             : <>Finalizing…</>}
         </span>
-        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
       </div>
 
       {showWaveform && (
@@ -1179,16 +1204,14 @@ function ResultsView({ chunks, perf, overallBpm, ci, biomarkers, pulsePeriod, fi
 /* ============================================================
    Whole-video failure
    ============================================================ */
-function WholeFailure({ onRetry, onSample }) {
+function WholeFailure({ onRetry, onSample, message }) {
+  const defaultMsg = "The rPPG model needs a clearly-lit, mostly-still face for the full 60 seconds. Try a video with steadier framing, or use our sample to see how it works.";
   return (
     <div className="card" data-screen-label="04 Failure">
       <div className="failure">
         <div className="failure-glyph">{Icon.alert(20)}</div>
-        <h3>We couldn't find a face in this video</h3>
-        <p>
-          The rPPG model needs a clearly-lit, mostly-still face for the full 60 seconds.
-          Try a video with steadier framing, or use our sample to see how it works.
-        </p>
+        <h3>{message ? "Analysis failed" : "We couldn't find a face in this video"}</h3>
+        <p>{message || defaultMsg}</p>
         <div className="failure-actions">
           <button className="btn btn-secondary" onClick={onRetry}>Try another video</button>
           <button className="link-btn" onClick={onSample}>Use sample video</button>

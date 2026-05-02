@@ -870,6 +870,30 @@ button { font-family: inherit; }
   z-index: 2;
 }
 
+/* Webcam permission / denied states */
+.webcam.webcam-permission {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.webcam-permission-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px;
+  text-align: center;
+  z-index: 2;
+  position: relative;
+}
+.webcam-permission-content p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
 .webcam-chips {
   display: flex; align-items: center;
   flex-wrap: wrap;

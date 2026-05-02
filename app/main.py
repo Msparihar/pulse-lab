@@ -81,12 +81,34 @@ async def index():
 
 @app.post("/api/analyze")
 async def analyze(file: UploadFile):
-    """Accept a video upload, save it, return a job_id."""
+    """Accept a video upload, save it, validate duration, return a job_id."""
+    import cv2  # noqa: PLC0415
+
     job_id = str(uuid.uuid4())
     suffix = Path(file.filename or "").suffix or ".mp4"
     dest = UPLOADS_DIR / f"{job_id}{suffix}"
     contents = await file.read()
     dest.write_bytes(contents)
+
+    # Validate minimum duration (30s floor)
+    try:
+        cap = cv2.VideoCapture(str(dest))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        cap.release()
+        duration = frame_count / fps if fps > 0 else 0
+        if duration < 30:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Video too short ({duration:.0f}s) — need at least 30 seconds for a reliable reading.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # If cv2 can't probe it (unusual format), allow it through — the pipeline will fail gracefully.
+        pass
+
     app.state.jobs[job_id] = dest
     return {"job_id": job_id}
 
@@ -143,6 +165,14 @@ async def stream(job_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    """Return index.html for all non-API, non-static paths (SPA deep-link support)."""
+    if full_path.startswith("api/") or full_path.startswith("static/"):
+        raise HTTPException(status_code=404)
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 if __name__ == "__main__":

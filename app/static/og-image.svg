@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <rect width="1200" height="630" fill="oklch(0.985 0.004 60)" rx="0"/>
+  <!-- Background subtle grid lines -->
+  <line x1="0" y1="315" x2="1200" y2="315" stroke="oklch(0.92 0.006 60)" stroke-width="1"/>
+  <line x1="600" y1="0" x2="600" y2="630" stroke="oklch(0.92 0.006 60)" stroke-width="1"/>
+
+  <!-- Brand mark icon (centered top-area) -->
+  <rect x="548" y="160" width="104" height="104" rx="26" fill="oklch(0.95 0.04 25)" stroke="oklch(0.85 0.08 25)" stroke-width="2"/>
+  <path d="M563 212 L578 212 L584 200 L590 224 L596 188 L602 214 L608 212 L637 212"
+        stroke="oklch(0.68 0.18 25)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Title -->
+  <text x="600" y="318" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif"
+        font-size="52" font-weight="600" fill="oklch(0.22 0.012 60)" letter-spacing="-1">Pulse Lab</text>
+
+  <!-- Subtitle -->
+  <text x="600" y="370" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif"
+        font-size="22" fill="oklch(0.48 0.01 60)" letter-spacing="-0.3">Heart rate from face video, in near real time</text>
+
+  <!-- ECG pulse line decoration -->
+  <path d="M160 450 L260 450 L290 410 L320 500 L350 380 L380 460 L410 450 L520 450"
+        stroke="oklch(0.68 0.18 25)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.7"/>
+  <path d="M680 450 L780 450 L810 410 L840 500 L870 380 L900 460 L930 450 L1040 450"
+        stroke="oklch(0.68 0.18 25)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.7"/>
+
+  <!-- URL -->
+  <text x="600" y="570" text-anchor="middle" font-family="monospace, system-ui"
+        font-size="16" fill="oklch(0.62 0.008 60)" letter-spacing="0.5">pulse-lab.manishsingh.tech</text>
+</svg>
