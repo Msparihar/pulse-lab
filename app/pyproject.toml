@@ -1,0 +1,13 @@
+[project]
+name = "pulse-lab"
+version = "0.2.0"
+description = "Near real-time rPPG — heart rate from a 60-second face video"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "open-rppg>=0.1",
+    "opencv-python>=4.5",
+    "numpy>=1.24",
+]

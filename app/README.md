@@ -6,20 +6,22 @@ A FastAPI-backed demo that accepts a face video, streams per-chunk heart-rate es
 
 ## Run locally
 
-Run all commands from the `app/` directory.
+From the `app/` directory:
 
-```bash
-# 1. Create a virtual environment
-uv venv
-
-# 2. Install dependencies
-uv pip install -r requirements.txt
-
-# 3. Start the server
+```
+uv sync
 uv run python main.py
 ```
 
-Then open `http://localhost:8000` in your browser.
+`uv sync` creates a `.venv` and installs everything from `pyproject.toml` (it'll generate `uv.lock` on first run). `uv run` executes inside that venv without needing to activate it.
+
+The first launch warms up JAX (5–10s); after `Ready.` you can hit http://localhost:8000.
+
+To skip model loading during UI iteration:
+
+```
+STUB_MODE=1 uv run python main.py
+```
 
 ## Endpoints
 
