@@ -19,7 +19,7 @@ function App() {
   const [chunks, setChunks]     = useState(buildInitialChunks());
   const [currentIdx, setCurrentIdx] = useState(0);
   const [final, setFinal]       = useState(null);     // final SSE payload
-  const [uploadMode, setUploadMode] = useState("upload"); // upload | record
+  const [uploadMode, setUploadMode] = useState("sample"); // sample | upload | record
   const esRef = useRef(null);
 
   // Pin coral accent on mount (one-time)
@@ -176,6 +176,7 @@ function App() {
     setChunks(buildInitialChunks());
     setCurrentIdx(0);
     setFinal(null);
+    setUploadMode("sample");
   };
 
   const onReset = () => {
@@ -186,6 +187,7 @@ function App() {
     setChunks(buildInitialChunks());
     setCurrentIdx(0);
     setFinal(null);
+    setUploadMode("sample");
   };
 
   return (

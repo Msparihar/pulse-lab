@@ -1066,3 +1066,329 @@ button { font-family: inherit; }
   50%      { opacity: 1; }
 }
 .proc-thumb-rec.is-dim { opacity: 0.4; }
+
+/* ============================================================
+   v2 — link-btn and btn-primary color-mix updates
+   ============================================================ */
+.link-btn {
+  text-decoration-color: color-mix(in oklch, var(--accent) 35%, transparent);
+}
+.link-btn:hover { text-decoration-color: var(--accent); }
+
+.btn-primary {
+  border-color: color-mix(in oklch, var(--accent) 88%, black);
+  box-shadow: 0 1px 0 0 color-mix(in oklch, var(--accent) 40%, transparent) inset, 0 1px 2px color-mix(in oklch, var(--accent) 18%, transparent);
+}
+
+.dropzone.is-active .dropzone-glyph,
+.dropzone.has-file .dropzone-glyph {
+  border-color: color-mix(in oklch, var(--accent) 30%, var(--bg));
+}
+
+/* ============================================================
+   v2 — Segmented control: 3-option (Sample / Upload / Record)
+   ============================================================ */
+/* ModeToggle already styled via .seg / .seg-btn — no new rules needed */
+
+/* ============================================================
+   v2 — Sample-first hero player
+   ============================================================ */
+.sample-hero {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, oklch(0.32 0.02 60), oklch(0.18 0.015 60));
+  border: 1px solid var(--line);
+  cursor: pointer;
+  margin-bottom: 18px;
+}
+.sample-hero video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sample-hero-poster {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 38% 50% at 50% 42%, oklch(0.72 0.045 50 / 0.55), transparent 62%),
+    radial-gradient(ellipse 60% 30% at 50% 78%, oklch(0.55 0.04 30 / 0.3), transparent 60%);
+  pointer-events: none;
+  transition: opacity .25s ease;
+}
+.sample-hero.is-playing .sample-hero-poster { opacity: 0; }
+.sample-hero-roi {
+  position: absolute;
+  left: 38%; top: 18%;
+  width: 26%; height: 56%;
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px oklch(0 0 0 / 0.25);
+  z-index: 3;
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+.sample-hero.is-playing .sample-hero-roi { opacity: 0.85; }
+.sample-hero-roi::before, .sample-hero-roi::after,
+.sample-hero-roi > span {
+  content: ""; position: absolute;
+  width: 10px; height: 10px;
+  border: 1.5px solid var(--accent);
+}
+.sample-hero-roi::before { top: -1.5px; left: -1.5px; border-right: none; border-bottom: none; }
+.sample-hero-roi::after  { top: -1.5px; right: -1.5px; border-left: none; border-bottom: none; }
+.sample-hero-roi > span:first-child { bottom: -1.5px; left: -1.5px; border-right: none; border-top: none; }
+.sample-hero-roi > span:last-child  { bottom: -1.5px; right: -1.5px; border-left: none; border-top: none; }
+
+.sample-hero-play {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  background: oklch(0.99 0 0 / 0.94);
+  border: 1px solid oklch(0 0 0 / 0.12);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 4;
+  color: var(--text);
+  transition: transform .15s ease, opacity .2s ease;
+  box-shadow: 0 12px 24px oklch(0 0 0 / 0.25);
+}
+.sample-hero:hover .sample-hero-play { transform: translate(-50%, -50%) scale(1.06); }
+.sample-hero.is-playing .sample-hero-play { opacity: 0; pointer-events: none; }
+
+.sample-hero-tag {
+  position: absolute; left: 12px; top: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: oklch(0.99 0 0 / 0.92);
+  background: oklch(0 0 0 / 0.5);
+  padding: 4px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  z-index: 5;
+}
+.sample-hero-duration {
+  position: absolute; right: 12px; bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: white;
+  background: oklch(0 0 0 / 0.55);
+  padding: 3px 8px;
+  border-radius: 4px;
+  z-index: 5;
+  font-variant-numeric: tabular-nums;
+}
+.sample-hero-progress {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: oklch(0 0 0 / 0.3);
+  z-index: 5;
+}
+.sample-hero-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0;
+  transition: width .15s linear;
+}
+
+.sample-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.sample-meta-title {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sample-meta-title h3 {
+  margin: 0; font-size: 16px; font-weight: 500; letter-spacing: -0.01em;
+}
+.sample-meta-title p {
+  margin: 0; font-size: 13px; color: var(--text-muted);
+}
+.sample-meta-actions {
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+
+.sample-divider {
+  display: flex; align-items: center; gap: 14px;
+  margin: 28px 0 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-subtle);
+}
+.sample-divider::before, .sample-divider::after {
+  content: ""; flex: 1;
+  height: 1px; background: var(--line);
+}
+
+/* ============================================================
+   v2 — Alt upload tiles (Upload video / Record with webcam)
+   ============================================================ */
+.alt-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.alt-tile {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+  text-align: left;
+  font-family: inherit;
+}
+.alt-tile:hover {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+}
+.alt-tile-head {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 14px; font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.alt-tile-head svg { color: var(--accent); }
+.alt-tile-sub {
+  font-size: 12px; color: var(--text-muted);
+  margin-left: 26px;
+  line-height: 1.45;
+}
+
+/* ============================================================
+   v2 — Video preview thumbnail inside dropzone (file-picked state)
+   ============================================================ */
+.dropzone-preview {
+  position: relative;
+  width: 220px;
+  aspect-ratio: 16 / 9;
+  margin: 0 auto 14px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(135deg, oklch(0.32 0.02 60), oklch(0.20 0.015 60));
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.dropzone-preview::after {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 45% 55% at 50% 42%, oklch(0.7 0.04 50 / 0.5), transparent 60%),
+    radial-gradient(ellipse 60% 30% at 50% 75%, oklch(0.55 0.04 30 / 0.35), transparent 60%);
+  pointer-events: none;
+}
+.dropzone-play {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: oklch(0.99 0 0 / 0.92);
+  border: 1px solid oklch(0.4 0 0 / 0.1);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2;
+  color: var(--text);
+  transition: transform .15s ease;
+}
+.dropzone-preview:hover .dropzone-play { transform: translate(-50%, -50%) scale(1.06); }
+.dropzone-duration {
+  position: absolute; right: 8px; bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: white;
+  background: oklch(0 0 0 / 0.55);
+  padding: 2px 6px;
+  border-radius: 4px;
+  z-index: 2;
+}
+
+/* ============================================================
+   v2 — Video preview modal
+   ============================================================ */
+.video-modal-backdrop {
+  position: fixed; inset: 0;
+  background: oklch(0.18 0.01 60 / 0.55);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  padding: 32px;
+}
+.video-modal {
+  background: var(--bg-elev);
+  border-radius: 14px;
+  padding: 18px;
+  max-width: 720px; width: 100%;
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 60px oklch(0.2 0.01 60 / 0.18);
+}
+.video-modal-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, oklch(0.32 0.02 60), oklch(0.20 0.015 60));
+  border-radius: 10px;
+  overflow: hidden;
+}
+.video-modal-frame::after {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 45% 55% at 50% 42%, oklch(0.7 0.04 50 / 0.55), transparent 60%),
+    radial-gradient(ellipse 60% 30% at 50% 75%, oklch(0.55 0.04 30 / 0.35), transparent 60%);
+}
+.video-modal-mock {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: oklch(0.95 0 0 / 0.85);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  z-index: 2;
+  gap: 6px;
+}
+.video-modal-controls {
+  display: flex; align-items: center; gap: 14px;
+  margin-top: 14px;
+  padding: 0 4px;
+}
+.video-modal-controls .scrubber {
+  flex: 1;
+  height: 3px;
+  background: var(--bg-sunken);
+  border-radius: 999px;
+  position: relative;
+  overflow: hidden;
+}
+.video-modal-controls .scrubber-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 32%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+.video-modal-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.video-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.video-modal-head h4 {
+  margin: 0; font-size: 14px; font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.video-modal-close {
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px 8px; font-size: 13px;
+  border-radius: 6px;
+}
+.video-modal-close:hover { background: var(--bg-sunken); color: var(--text); }

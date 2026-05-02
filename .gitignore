@@ -5,6 +5,7 @@ Research/yarppg/
 # Design pipeline artifacts (Claude Design output + the prompts that generated it)
 Wise/
 Wise.zip
+Wise-v2-refresh/
 CLAUDE-DESIGN-PROMPT.md
 CLAUDE-DESIGN-PROMPT-v2.md
 

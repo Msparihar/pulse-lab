@@ -31,12 +31,116 @@ const Icon = {
 };
 
 /* ============================================================
-   Brand mark + ECG line
+   Brand mark + ECG line (v2: animated beat-schedule ECG)
    ============================================================ */
 function ECG({ width = 220, height = 24 }) {
-  const path = "M0,12 L30,12 L36,12 L40,6 L44,18 L48,4 L52,20 L56,12 L90,12 L96,12 L100,8 L104,16 L108,12 L150,12 L156,12 L160,2 L164,22 L168,8 L172,16 L176,12 L220,12";
+  // Animated heartbeat with natural irregularity:
+  //  - per-beat jitter on cadence (RR interval), R-spike amplitude, T amplitude
+  //  - tiny baseline wander so the line breathes
+  //  - the occasional slightly-early/late beat
+  const [phase, setPhase] = useState(0);
+  // Beats live in a ref so they survive re-renders and accumulate as we scroll.
+  // Each beat = { x: pixel position of its R-spike, rAmp, tAmp, period }
+  const beatsRef = useRef(null);
+
+  const W = 220, H = 24;
+  const mid = H / 2;
+  const speed = 22; // px/sec
+
+  // Initialize a couple of beats off the right edge
+  if (beatsRef.current === null) {
+    const seed = [];
+    let x = -10;
+    while (x < W + 80) {
+      const period = 58 + (Math.random() - 0.5) * 14; // 51..65 px between beats
+      x += period;
+      seed.push({
+        x,
+        period,
+        rAmp: 8 + Math.random() * 2.5,         // 8..10.5
+        tAmp: 2 + Math.random() * 1.2,         // 2..3.2
+        pAmp: 1 + Math.random() * 0.6,
+      });
+    }
+    beatsRef.current = seed;
+  }
+
+  useEffect(() => {
+    let raf;
+    let last = performance.now();
+    const tick = (t) => {
+      const dt = (t - last) / 1000;
+      last = t;
+      // Scroll all beats left
+      const beats = beatsRef.current;
+      for (let i = 0; i < beats.length; i++) beats[i].x -= speed * dt;
+      // Drop beats fully off the left
+      while (beats.length && beats[0].x < -20) beats.shift();
+      // Add new beats off the right when we're running thin
+      while (beats[beats.length - 1].x < W + 80) {
+        const last = beats[beats.length - 1];
+        // Skip a beat occasionally (PVC-style pause), or run a slightly fast one
+        const roll = Math.random();
+        let period;
+        if (roll < 0.06)      period = last.period * (1.25 + Math.random() * 0.15); // long pause
+        else if (roll < 0.14) period = last.period * (0.78 + Math.random() * 0.08); // early beat
+        else                  period = 58 + (Math.random() - 0.5) * 14;
+        beats.push({
+          x: last.x + period,
+          period,
+          rAmp: 8 + Math.random() * 2.5,
+          tAmp: 2 + Math.random() * 1.2,
+          pAmp: 1 + Math.random() * 0.6,
+        });
+      }
+      setPhase(p => p + dt);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const path = useMemo(() => {
+    const beats = beatsRef.current || [];
+    // Sample y(x) at every pixel by finding the nearest beat and applying its waveform
+    let d = "";
+    let started = false;
+    for (let x = 0; x <= W; x += 1) {
+      // tiny baseline wander (slow sin) — purely cosmetic
+      const wander = Math.sin((x * 0.05) + phase * 0.6) * 0.25;
+      // Find the beat whose R-spike is nearest to x
+      let nearest = null;
+      let nd = Infinity;
+      for (let i = 0; i < beats.length; i++) {
+        const b = beats[i];
+        const d2 = x - b.x;
+        if (Math.abs(d2) < nd) { nd = Math.abs(d2); nearest = b; }
+      }
+      let y = mid + wander;
+      if (nearest) {
+        const u = x - nearest.x; // signed offset from R-spike (px)
+        // Waveform shape relative to R-spike at u=0:
+        //   P wave:  u in [-14, -10]  small bump up
+        //   PR:      u in [-10, -3]   flat
+        //   Q:       u in [-3, -1]    small dip down (positive y)
+        //   R:       u in [-1, 1]     tall spike up (negative y)
+        //   S:       u in [1, 3]      dip down
+        //   ST:      u in [3, 7]      flat
+        //   T wave:  u in [7, 16]     medium bump up
+        if (u >= -14 && u < -10)     y -= nearest.pAmp * Math.sin(((u + 14) / 4) * Math.PI);
+        else if (u >= -3  && u < -1) y += 1.2 * ((u + 3) / 2);
+        else if (u >= -1  && u <  1) y -= nearest.rAmp * Math.cos((u) * Math.PI / 2);
+        else if (u >=  1  && u <  3) y += 4.2 * (1 - (u - 1) / 2);
+        else if (u >=  7  && u < 16) y -= nearest.tAmp * Math.sin(((u - 7) / 9) * Math.PI);
+      }
+      d += (started ? " L" : "M") + x + "," + y.toFixed(2);
+      started = true;
+    }
+    return d;
+  }, [phase]);
+
   return (
-    <svg className="ecg" width={width} height={height} viewBox="0 0 220 24" fill="none">
+    <svg className="ecg" width={width} height={height} viewBox={`0 0 ${W} ${H}`} fill="none">
       <path d={path} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );
@@ -45,7 +149,7 @@ function ECG({ width = 220, height = 24 }) {
 function BrandMark({ size = 28 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 28 28" fill="none">
-      <rect x="0.5" y="0.5" width="27" height="27" rx="7" fill="var(--accent-soft)" stroke="oklch(0.85 0.07 25)"/>
+      <rect x="0.5" y="0.5" width="27" height="27" rx="7" fill="var(--accent-soft)" stroke="color-mix(in oklch, var(--accent) 30%, var(--bg))"/>
       <path d="M4 14 L8 14 L10 10 L12 18 L14 8 L16 16 L18 14 L24 14"
             stroke="var(--accent)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
@@ -71,11 +175,174 @@ function Header() {
 }
 
 /* ============================================================
+   v2 — Sample-first hero player
+   ============================================================ */
+// Public-domain face video (Pexels — Polina Tankilevitch).
+// Looped on play; muted so autoplay-on-tap is allowed.
+// NOTE: Clicking "Analyze sample →" calls the real /api/analyze/sample endpoint.
+const SAMPLE_VIDEO_URL = "https://videos.pexels.com/video-files/3771610/3771610-uhd_2560_1440_25fps.mp4";
+
+function SampleHero({ onAnalyze, onPickFile, onRecord }) {
+  const videoRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(60);
+  const inputRef = useRef(null);
+
+  const fmt = (s) => {
+    if (!isFinite(s)) s = 0;
+    const m = Math.floor(s / 60);
+    const ss = Math.floor(s % 60);
+    return `${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")}`;
+  };
+
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play(); else v.pause();
+  };
+
+  return (
+    <div data-screen-label="01 Upload">
+      <div className={`sample-hero ${playing ? "is-playing" : ""}`} onClick={togglePlay}>
+        <video
+          ref={videoRef}
+          src={SAMPLE_VIDEO_URL}
+          muted
+          playsInline
+          preload="metadata"
+          loop
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onLoadedMetadata={(e) => setDuration(e.target.duration || 60)}
+          onTimeUpdate={(e) => setTime(e.target.currentTime)}
+        />
+        <div className="sample-hero-poster"/>
+        <div className="sample-hero-roi"><span/><span/></div>
+        <span className="sample-hero-tag">Sample · 60s face video</span>
+        <div className="sample-hero-play">
+          <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4 2.5v11l9-5.5z"/>
+          </svg>
+        </div>
+        <span className="sample-hero-duration tabular">
+          {fmt(time)} / {fmt(Math.min(duration, 60))}
+        </span>
+        <div className="sample-hero-progress">
+          <div className="sample-hero-progress-fill"
+               style={{ width: `${Math.min(100, (time / Math.max(1, Math.min(duration, 60))) * 100)}%` }}/>
+        </div>
+      </div>
+
+      <div className="sample-meta">
+        <div className="sample-meta-title">
+          <h3>Bundled sample · clear face, even lighting</h3>
+          <p>Press play to preview, then run the live rPPG analysis on it.</p>
+        </div>
+        <div className="sample-meta-actions">
+          <button className="btn btn-ghost" style={{ padding: "8px 14px" }} onClick={() => {
+            const v = videoRef.current;
+            if (v) { v.currentTime = 0; v.play(); }
+          }}>↺ Replay</button>
+          <button className="btn btn-primary" onClick={onAnalyze}>
+            Analyze sample →
+          </button>
+        </div>
+      </div>
+
+      <div className="sample-divider">or use your own video</div>
+
+      <input
+        ref={inputRef} type="file" accept="video/mp4,video/quicktime,video/webm"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onPickFile(f);
+        }}
+      />
+      <div className="alt-row">
+        <button className="alt-tile" onClick={() => inputRef.current?.click()}>
+          <span className="alt-tile-head">
+            {Icon.upload(16)} Upload a video
+          </span>
+          <span className="alt-tile-sub">
+            60-second .mp4 or .mov, up to 100 MB
+          </span>
+        </button>
+        <button className="alt-tile" onClick={onRecord}>
+          <span className="alt-tile-head">
+            <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)", display: "inline-block" }}/>
+            Record with webcam
+          </span>
+          <span className="alt-tile-sub">
+            Live 60-second capture, then chunked analysis
+          </span>
+        </button>
+      </div>
+
+      <div className="howitworks" style={{ marginTop: 28 }}>
+        <span className="howitworks-step">
+          <span className="howitworks-num">1</span> 60-second video
+        </span>
+        <span className="howitworks-arrow">→</span>
+        <span className="howitworks-step">
+          <span className="howitworks-num">2</span> twelve 5-second chunks
+        </span>
+        <span className="howitworks-arrow">→</span>
+        <span className="howitworks-step">
+          <span className="howitworks-num">3</span> per-chunk BPM, streamed
+        </span>
+        <span className="howitworks-arrow">→</span>
+        <span className="howitworks-step">
+          <span className="howitworks-num">4</span> final estimate
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   v2 — Video preview modal (UI shell; real playback is a future TODO)
+   ============================================================ */
+function VideoPreviewModal({ file, onClose }) {
+  return (
+    <div className="video-modal-backdrop" onClick={onClose}>
+      <div className="video-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="video-modal-head">
+          <h4>{file?.name || "preview"}</h4>
+          <button className="video-modal-close" onClick={onClose}>Close</button>
+        </div>
+        <div className="video-modal-frame">
+          <div className="video-modal-mock">
+            <div style={{ fontSize: 28, opacity: 0.85 }}>▸</div>
+            <div>preview · 60s · 16:9</div>
+          </div>
+        </div>
+        <div className="video-modal-controls">
+          <button className="btn btn-ghost" style={{ padding: "6px 10px" }}>▸ Play</button>
+          <span className="video-modal-time tabular">00:00</span>
+          <div className="scrubber"><div className="scrubber-fill"/></div>
+          <span className="video-modal-time tabular">01:00</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    v2 — Segmented mode toggle inside upload card
    ============================================================ */
 function ModeToggle({ value, onChange }) {
   return (
     <div className="seg" role="tablist">
+      <button
+        className={`seg-btn ${value === "sample" ? "is-active" : ""}`}
+        onClick={() => onChange("sample")}
+        role="tab" aria-selected={value === "sample"}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>
+        Sample
+      </button>
       <button
         className={`seg-btn ${value === "upload" ? "is-active" : ""}`}
         onClick={() => onChange("upload")}
@@ -280,10 +547,11 @@ function WebcamCapture({ onComplete }) {
 }
 
 /* ============================================================
-   Upload Zone
+   Upload Zone (v2: sample-first landing + video preview modal)
    ============================================================ */
 function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, onRecordComplete }) {
   const [drag, setDrag] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const inputRef = useRef(null);
 
   const onDrop = (e) => {
@@ -292,6 +560,20 @@ function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, on
     const f = e.dataTransfer.files?.[0];
     if (f) onPickFile(f);
   };
+
+  // Default landing: sample-first hero. Only show legacy dropzone / webcam
+  // when user explicitly switches modes.
+  if (mode === "sample" && !file) {
+    return (
+      <div className="card">
+        <SampleHero
+          onAnalyze={() => { onPickSample(); }}
+          onPickFile={(f) => { onPickFile(f); setMode("upload"); }}
+          onRecord={() => setMode("record")}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="card" data-screen-label="01 Upload">
@@ -326,7 +608,7 @@ function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, on
             onDragOver={(e)  => { e.preventDefault(); setDrag(true); }}
             onDragLeave={()  => setDrag(false)}
             onDrop={onDrop}
-            onClick={() => inputRef.current?.click()}
+            onClick={() => { if (!file) inputRef.current?.click(); }}
           >
             <input
               ref={inputRef}
@@ -337,20 +619,38 @@ function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, on
                 if (f) onPickFile(f);
               }}
             />
-            <div className="dropzone-glyph">{file ? Icon.film() : Icon.upload()}</div>
             {file ? (
               <>
+                <div className="dropzone-preview"
+                     onClick={(e) => { e.stopPropagation(); setPreviewing(true); }}>
+                  <div className="dropzone-play">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M4 2.5v11l9-5.5z"/>
+                    </svg>
+                  </div>
+                  <span className="dropzone-duration tabular">01:00</span>
+                </div>
                 <h3>{file.name}</h3>
-                <p>Ready to analyze.</p>
+                <p>
+                  Ready to analyze.{" "}
+                  <button className="link-btn" style={{ marginLeft: 4 }}
+                    onClick={(e) => { e.stopPropagation(); setPreviewing(true); }}>Preview</button>
+                  <span style={{ color: "var(--text-subtle)", margin: "0 8px" }}>·</span>
+                  <button className="link-btn"
+                    onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}>Replace</button>
+                </p>
                 <div className="file-meta tabular">{(file.size / (1024*1024)).toFixed(1)} MB · 60 s · ready</div>
               </>
             ) : (
               <>
+                <div className="dropzone-glyph">{Icon.upload()}</div>
                 <h3>Drop a face video, or click to select</h3>
                 <p>We'll process it in twelve 5-second chunks.</p>
               </>
             )}
           </div>
+
+          {previewing && <VideoPreviewModal file={file} onClose={() => setPreviewing(false)}/>}
 
           <div className="constraints">
             <span>
@@ -456,9 +756,9 @@ function ProcThumbRoi({ lost }) {
 }
 
 /* ============================================================
-   v2 — Live BVP waveform
+   v2 — Live BVP waveform (beat-schedule algorithm)
    props:
-     bpm      — heart rate, used to drive synthetic wave frequency
+     bpm      — heart rate, drives beat frequency
      frozen   — if true, render a static snapshot instead of animating
      height   — SVG height in px (default 72)
      samples  — real BVP array from the final SSE event (used when frozen=true)
@@ -467,6 +767,28 @@ function LiveWaveform({ bpm = 76, frozen = false, height = 72, samples = [] }) {
   const W = 800, H = height;
   const [phase, setPhase] = useState(0);
 
+  // px-per-second scroll speed: ~10s of waveform shown across W
+  const speed = W / 10;
+  // Mean px-per-beat at the current bpm (10s = W px, beats in 10s = bpm/6)
+  const meanPeriodPx = W / Math.max(1, (bpm / 60) * 10);
+
+  const beatsRef = useRef(null);
+
+  if (beatsRef.current === null) {
+    const seed = [];
+    let x = -meanPeriodPx;
+    while (x < W + meanPeriodPx * 2) {
+      x += meanPeriodPx * (0.88 + Math.random() * 0.24); // ±12%
+      seed.push({
+        x,
+        sysAmp: 0.85 + Math.random() * 0.3,    // 0.85..1.15
+        dicAmp: 0.35 + Math.random() * 0.2,    // 0.35..0.55
+        baseline: (Math.random() - 0.5) * 0.06, // tiny wander
+      });
+    }
+    beatsRef.current = seed;
+  }
+
   useEffect(() => {
     if (frozen) return;
     let raf;
@@ -474,12 +796,31 @@ function LiveWaveform({ bpm = 76, frozen = false, height = 72, samples = [] }) {
     const tick = (t) => {
       const dt = (t - last) / 1000;
       last = t;
-      setPhase(p => p + dt * (W / 10));
+      const beats = beatsRef.current;
+      const dx = speed * dt;
+      for (let i = 0; i < beats.length; i++) beats[i].x -= dx;
+      while (beats.length && beats[0].x < -meanPeriodPx) beats.shift();
+      while (beats[beats.length - 1].x < W + meanPeriodPx * 2) {
+        const last = beats[beats.length - 1];
+        // Most beats: ±12% jitter. Occasionally an early beat or longer pause.
+        const roll = Math.random();
+        let factor;
+        if (roll < 0.05)      factor = 1.25 + Math.random() * 0.18; // long pause
+        else if (roll < 0.12) factor = 0.78 + Math.random() * 0.08; // premature
+        else                  factor = 0.88 + Math.random() * 0.24;
+        beats.push({
+          x: last.x + meanPeriodPx * factor,
+          sysAmp: 0.85 + Math.random() * 0.3,
+          dicAmp: 0.35 + Math.random() * 0.2,
+          baseline: (Math.random() - 0.5) * 0.06,
+        });
+      }
+      setPhase(p => p + dt);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [frozen]);
+  }, [frozen, speed, meanPeriodPx]);
 
   // Frozen path from real BVP samples when available
   const frozenPath = useMemo(() => {
@@ -491,23 +832,32 @@ function LiveWaveform({ bpm = 76, frozen = false, height = 72, samples = [] }) {
     }).join(" ");
   }, [frozen, samples, H]);
 
-  // Synthetic BVP-ish waveform (used for live mode and frozen fallback)
-  const pulsesPerSec = bpm / 60;
-  const samplesPerSec = W / 10;
-  const period = samplesPerSec / pulsesPerSec;
+  // Beat-schedule synthetic path (live mode, and frozen fallback when no samples)
   const syntheticPath = useMemo(() => {
+    const beats = beatsRef.current || [];
+    const peak = (b, c, w) => Math.exp(-((b - c) ** 2) / (2 * w * w));
     let d = "";
     for (let x = 0; x <= W; x += 2) {
-      const t = (x + phase) / period;
-      const beat = t - Math.floor(t);
-      const peak = (b, c, w) => Math.exp(-((b - c) ** 2) / (2 * w * w));
-      const y = -(1.0 * peak(beat, 0.18, 0.06) + 0.45 * peak(beat, 0.45, 0.07)) + 0.35;
-      const py = H / 2 + y * (H * 0.36);
+      // tiny baseline wander — slow sin
+      const wander = Math.sin((x * 0.012) + phase * 0.7) * 0.04;
+      // Sum contributions of nearby beats (BVP shape spans ~one period each side)
+      let val = wander;
+      for (let i = 0; i < beats.length; i++) {
+        const b = beats[i];
+        const u = (x - b.x) / meanPeriodPx; // normalized offset
+        if (u < -0.4 || u > 1.0) continue;   // skip distant beats for perf
+        // Two-peak BVP-ish: systolic (u≈0.18) + dicrotic (u≈0.45)
+        val -= b.sysAmp * peak(u, 0.18, 0.07);
+        val -= b.dicAmp * peak(u, 0.50, 0.09);
+        val += b.baseline * peak(u, 0.3, 0.4);
+      }
+      const py = H / 2 + (val + 0.45) * (H * 0.34);
       d += (x === 0 ? "M" : " L") + x + "," + py.toFixed(1);
     }
     return d;
-  }, [phase, period, H]);
+  }, [phase, meanPeriodPx, H]);
 
+  // Prefer real samples in frozen mode; fall back to synthetic
   const pathToRender = frozen && frozenPath ? frozenPath : syntheticPath;
 
   return (
@@ -853,6 +1203,7 @@ function WholeFailure({ onRetry, onSample }) {
    ============================================================ */
 Object.assign(window, {
   Icon, ECG, BrandMark, Header,
+  SampleHero, VideoPreviewModal,
   ModeToggle, WebcamCapture,
   UploadZone, ProcessingView, ResultsView, WholeFailure,
   LiveWaveform, ProcThumbRoi,
