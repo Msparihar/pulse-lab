@@ -118,6 +118,7 @@ button { font-family: inherit; }
   border-style: solid;
   border-color: var(--line);
   background: var(--bg-elev);
+  padding: 16px 24px;
 }
 .dropzone-glyph {
   width: 44px; height: 44px;
@@ -1120,29 +1121,19 @@ button { font-family: inherit; }
 .sample-hero {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 14px;
+  border-radius: 14px 14px 0 0;
   overflow: hidden;
   background: linear-gradient(135deg, oklch(0.32 0.02 60), oklch(0.18 0.015 60));
   border: 1px solid var(--line);
-  cursor: pointer;
-  margin-bottom: 18px;
+  border-bottom: none;
 }
 .sample-hero video {
-  position: absolute; inset: 0;
-  width: 100%; height: 100%;
-  object-fit: cover;
   display: block;
+  width: 100%;
+  border-radius: 0;
+  /* aspect-ratio preserved by the video's own dimensions */
 }
-.sample-hero-poster {
-  position: absolute; inset: 0;
-  background:
-    radial-gradient(ellipse 38% 50% at 50% 42%, oklch(0.72 0.045 50 / 0.55), transparent 62%),
-    radial-gradient(ellipse 60% 30% at 50% 78%, oklch(0.55 0.04 30 / 0.3), transparent 60%);
-  pointer-events: none;
-  transition: opacity .25s ease;
-}
-.sample-hero.is-playing .sample-hero-poster { opacity: 0; }
+/* .sample-hero-poster removed — not needed with native controls */
 .sample-hero-roi {
   position: absolute;
   left: 38%; top: 18%;
@@ -1151,7 +1142,7 @@ button { font-family: inherit; }
   border-radius: 6px;
   pointer-events: none;
   box-shadow: 0 0 0 1px oklch(0 0 0 / 0.25);
-  z-index: 3;
+  z-index: 5;
   opacity: 0;
   transition: opacity .25s ease;
 }
@@ -1167,21 +1158,7 @@ button { font-family: inherit; }
 .sample-hero-roi > span:first-child { bottom: -1.5px; left: -1.5px; border-right: none; border-top: none; }
 .sample-hero-roi > span:last-child  { bottom: -1.5px; right: -1.5px; border-left: none; border-top: none; }
 
-.sample-hero-play {
-  position: absolute; left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 72px; height: 72px;
-  border-radius: 50%;
-  background: oklch(0.99 0 0 / 0.94);
-  border: 1px solid oklch(0 0 0 / 0.12);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 4;
-  color: var(--text);
-  transition: transform .15s ease, opacity .2s ease;
-  box-shadow: 0 12px 24px oklch(0 0 0 / 0.25);
-}
-.sample-hero:hover .sample-hero-play { transform: translate(-50%, -50%) scale(1.06); }
-.sample-hero.is-playing .sample-hero-play { opacity: 0; pointer-events: none; }
+/* .sample-hero-play removed — native controls handle play/pause */
 
 .sample-hero-tag {
   position: absolute; left: 12px; top: 12px;
@@ -1193,7 +1170,8 @@ button { font-family: inherit; }
   border-radius: 4px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  z-index: 5;
+  z-index: 6;
+  pointer-events: none;
 }
 .sample-hero-duration {
   position: absolute; right: 12px; bottom: 12px;
@@ -1207,10 +1185,14 @@ button { font-family: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .sample-hero-progress {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  height: 2px;
-  background: oklch(0 0 0 / 0.3);
-  z-index: 5;
+  width: 100%;
+  height: 3px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 14px 14px;
+  overflow: hidden;
+  margin-bottom: 18px;
 }
 .sample-hero-progress-fill {
   height: 100%;

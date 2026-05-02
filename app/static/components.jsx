@@ -205,11 +205,13 @@ function SampleHero({ onAnalyze, onPickFile, onRecord }) {
 
   return (
     <div data-screen-label="01 Upload">
-      <div className={`sample-hero ${playing ? "is-playing" : ""}`} onClick={togglePlay}>
+      <div className={`sample-hero ${playing ? "is-playing" : ""}`}>
+        <div className="sample-hero-roi"><span/><span/></div>
+        <span className="sample-hero-tag">Sample · 60s face video</span>
         <video
           ref={videoRef}
           src={SAMPLE_VIDEO_URL}
-          muted
+          controls
           playsInline
           preload="metadata"
           loop
@@ -218,21 +220,10 @@ function SampleHero({ onAnalyze, onPickFile, onRecord }) {
           onLoadedMetadata={(e) => setDuration(e.target.duration || 60)}
           onTimeUpdate={(e) => setTime(e.target.currentTime)}
         />
-        <div className="sample-hero-poster"/>
-        <div className="sample-hero-roi"><span/><span/></div>
-        <span className="sample-hero-tag">Sample · 60s face video</span>
-        <div className="sample-hero-play">
-          <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M4 2.5v11l9-5.5z"/>
-          </svg>
-        </div>
-        <span className="sample-hero-duration tabular">
-          {fmt(time)} / {fmt(Math.min(duration, 60))}
-        </span>
-        <div className="sample-hero-progress">
-          <div className="sample-hero-progress-fill"
-               style={{ width: `${Math.min(100, (time / Math.max(1, Math.min(duration, 60))) * 100)}%` }}/>
-        </div>
+      </div>
+      <div className="sample-hero-progress">
+        <div className="sample-hero-progress-fill"
+             style={{ width: `${Math.min(100, (time / Math.max(1, Math.min(duration, 60))) * 100)}%` }}/>
       </div>
 
       <div className="sample-meta">
@@ -577,8 +568,8 @@ function WebcamCapture({ onComplete }) {
    ============================================================ */
 function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, onRecordComplete }) {
   const [drag, setDrag] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
   const inputRef = useRef(null);
+  const previewUrlRef = useRef(null);
 
   const onDrop = (e) => {
     e.preventDefault();
@@ -646,27 +637,29 @@ function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, on
               }}
             />
             {file ? (
-              <>
-                <div className="dropzone-preview"
-                     onClick={(e) => { e.stopPropagation(); setPreviewing(true); }}>
-                  <div className="dropzone-play">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M4 2.5v11l9-5.5z"/>
-                    </svg>
-                  </div>
-                  <span className="dropzone-duration tabular">01:00</span>
-                </div>
-                <h3>{file.name}</h3>
-                <p>
-                  Ready to analyze.{" "}
-                  <button className="link-btn" style={{ marginLeft: 4 }}
-                    onClick={(e) => { e.stopPropagation(); setPreviewing(true); }}>Preview</button>
-                  <span style={{ color: "var(--text-subtle)", margin: "0 8px" }}>·</span>
-                  <button className="link-btn"
-                    onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}>Replace</button>
-                </p>
-                <div className="file-meta tabular">{(file.size / (1024*1024)).toFixed(1)} MB · 60 s · ready</div>
-              </>
+              (() => {
+                // Revoke previous blob URL to avoid leaks, then create a fresh one
+                if (previewUrlRef.current) { URL.revokeObjectURL(previewUrlRef.current); }
+                previewUrlRef.current = URL.createObjectURL(file);
+                return (
+                  <>
+                    <video
+                      src={previewUrlRef.current}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ width: "100%", borderRadius: 6, maxHeight: 260, background: "#000" }}
+                    />
+                    <h3 style={{ marginTop: 10 }}>{file.name}</h3>
+                    <p>
+                      <button className="link-btn"
+                        onClick={(e) => { e.stopPropagation(); inputRef.current?.click(); }}>Replace</button>
+                    </p>
+                    <div className="file-meta tabular">{(file.size / (1024*1024)).toFixed(1)} MB · ready</div>
+                  </>
+                );
+              })()
             ) : (
               <>
                 <div className="dropzone-glyph">{Icon.upload()}</div>
@@ -675,8 +668,6 @@ function UploadZone({ file, onPickFile, onPickSample, onStart, mode, setMode, on
               </>
             )}
           </div>
-
-          {previewing && <VideoPreviewModal file={file} onClose={() => setPreviewing(false)}/>}
 
           <div className="constraints">
             <span>
@@ -1101,7 +1092,12 @@ function ResultsView({ chunks, perf, overallBpm, ci, biomarkers, pulsePeriod, fi
     <div className="card" data-screen-label="03 Results">
       <div className="results-grid">
         <div>
-          <div className="result-label">Overall BPM</div>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div className="result-label">Overall BPM</div>
+            <button className="btn btn-secondary" onClick={onReset} style={{ fontSize: 12, padding: "6px 12px", flexShrink: 0 }}>
+              New analysis
+            </button>
+          </div>
           <div className="result-num-wrap">
             <div className="result-num is-pulsing tabular" style={{ "--pulse-period": `${pulsePeriod}s` }}>
               {overallBpm}
@@ -1164,8 +1160,8 @@ function ResultsView({ chunks, perf, overallBpm, ci, biomarkers, pulsePeriod, fi
             <div className="biomarker-card">
               <div className="biomarker-label">Respiratory rate</div>
               <div className="biomarker-value tabular">
-                {biomarkers.rr != null ? biomarkers.rr : "—"}
-                {biomarkers.rr != null && <span className="biomarker-unit">br/min</span>}
+                {(biomarkers.rr != null && biomarkers.rr !== 0) ? biomarkers.rr : "—"}
+                {(biomarkers.rr != null && biomarkers.rr !== 0) && <span className="biomarker-unit">br/min</span>}
               </div>
             </div>
             <div className="biomarker-card">
