@@ -21,12 +21,15 @@ Why this shape:
   - All blocking work runs on a thread executor; the SSE event loop stays free.
 """
 import asyncio
+import logging
 import time
 from pathlib import Path
 from typing import AsyncIterator
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger("app.pipeline")
 
 # SQI below this → chunk treated as failed in the UI.
 # Source: chunked-rppg-best-practices.md (Nature npj Biosensing).
@@ -55,6 +58,10 @@ def _read_video_at_30fps(path: Path) -> np.ndarray:
     and keeps the per-frame timing close enough for rPPG (the model itself
     tolerates ±5% FPS drift; we tighten further by explicit resampling).
     """
+    size_mb = path.stat().st_size / (1024 * 1024) if path.exists() else 0.0
+    logger.info("[DECODE] Reading video path=%s size_mb=%.2f", path.name, size_mb)
+    t0 = time.perf_counter()
+
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {path}")
@@ -82,6 +89,12 @@ def _read_video_at_30fps(path: Path) -> np.ndarray:
     if abs(src_fps - TARGET_FPS) > 0.5:
         idx = np.linspace(0, len(arr) - 1, target_count).astype(np.int64)
         arr = arr[idx]
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    logger.info(
+        "[DECODE] Decoded frames=%d src_fps=%.1f target_count=%d duration_s=%.1f elapsed_ms=%d",
+        len(arr), src_fps, target_count, duration, elapsed_ms,
+    )
     return arr
 
 
@@ -97,27 +110,37 @@ def _slice_into_chunks(frames: np.ndarray) -> list[np.ndarray]:
     return chunks
 
 
-def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
+def _process_chunk_sync(model, chunk: np.ndarray, idx: int = -1, job_id: str = "") -> dict:
     """Run inference on one chunk. Returns a dict with bpm/quality/latency
     plus a `failed` boolean and (when failed) a human-readable reason that
     the UI tooltip can show. Also captures per-chunk HRV and BVP."""
+    logger.info("[CHUNK] Starting idx=%d frames=%d job_id=%s", idx, len(chunk), job_id)
+
+    def _done(out: dict) -> dict:
+        logger.info(
+            "[CHUNK] Done idx=%d bpm=%s sqi=%s latency_ms=%d failed=%s reason=%s job_id=%s",
+            idx, out.get("bpm"), out.get("quality"), out.get("latency_ms", 0),
+            out.get("failed"), out.get("reason"), job_id,
+        )
+        return out
+
     if len(chunk) < MIN_FRAMES_FOR_INFERENCE:
-        return {
+        return _done({
             "bpm": None, "quality": None, "latency_ms": 0,
             "failed": True, "reason": "too short",
             "hrv": {}, "bvp_samples": [],
-        }
+        })
 
     t0 = time.perf_counter()
     try:
         result = model.process_video_tensor(chunk, fps=float(TARGET_FPS))
     except Exception as e:
-        return {
+        return _done({
             "bpm": None, "quality": None,
             "latency_ms": int((time.perf_counter() - t0) * 1000),
             "failed": True, "reason": f"{type(e).__name__}",
             "hrv": {}, "bvp_samples": [],
-        }
+        })
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     # Capture the BVP segment for this chunk immediately after inference.
@@ -135,23 +158,23 @@ def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
         pass
 
     if not result or result.get("hr") is None:
-        return {
+        return _done({
             "bpm": None, "quality": None, "latency_ms": latency_ms,
             "failed": True, "reason": "no signal",
             "hrv": {}, "bvp_samples": bvp_samples,
-        }
+        })
 
     sqi = float(result.get("SQI") or 0.0)
     if sqi < SQI_FAIL_THRESHOLD:
-        return {
+        return _done({
             "bpm": None, "quality": round(sqi, 3), "latency_ms": latency_ms,
             "failed": True, "reason": "signal too noisy",
             "hrv": {}, "bvp_samples": bvp_samples,
-        }
+        })
 
     hrv = result.get("hrv") or {}
 
-    return {
+    return _done({
         "bpm": int(round(float(result["hr"]))),
         "quality": round(sqi, 3),
         "latency_ms": latency_ms,
@@ -159,7 +182,7 @@ def _process_chunk_sync(model, chunk: np.ndarray) -> dict:
         "reason": None,
         "hrv": hrv if isinstance(hrv, dict) else {},
         "bvp_samples": bvp_samples,
-    }
+    })
 
 
 def _aggregate_overall(chunk_results: list[dict]) -> dict:
@@ -227,16 +250,21 @@ def _aggregate_overall(chunk_results: list[dict]) -> dict:
         rng = max(bvp_tail) - lo or 1.0
         bvp_tail = [round(2 * (v - lo) / rng - 1, 4) for v in bvp_tail]
 
-    return {
+    result = {
         "overall_bpm": overall_bpm,
         "ci": ci,
         "respiratory_rate": rr,
         "hrv": hrv,
         "bvp": bvp_tail,
     }
+    logger.info(
+        "[AGGREGATE] valid_chunks=%d/%d overall_bpm=%s hrv_chunks=%d",
+        len(valid), len(chunk_results), overall_bpm, len(hrv_chunks),
+    )
+    return result
 
 
-async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
+async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> AsyncIterator[dict]:
     """Stream real chunk events from a video file using open-rppg."""
     pipeline_t0 = time.perf_counter()
 
@@ -245,7 +273,7 @@ async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
 
     chunk_results: list[dict] = []
     for i, chunk in enumerate(chunks):
-        result = await asyncio.to_thread(_process_chunk_sync, model, chunk)
+        result = await asyncio.to_thread(_process_chunk_sync, model, chunk, i, job_id)
         chunk_results.append(result)
         # Strip the heavy bvp_samples + hrv from the streamed event payload —
         # frontend only needs the fields below for the live timeline UI.
@@ -284,18 +312,24 @@ async def real_chunk_stream(video_path: Path, model) -> AsyncIterator[dict]:
 
 
 # Stub kept for offline UI development without the heavy rPPG install.
-async def fake_chunk_stream() -> AsyncIterator[dict]:
+async def fake_chunk_stream(*, job_id: str = "") -> AsyncIterator[dict]:
     STUB_BPMS      = [72, 74, 73, 76, 78, 77, 80, 82, 81, 79, 77, 75]
     STUB_QUALITIES = [0.91, 0.93, 0.88, 0.90, 0.85, 0.92, 0.81, 0.78, 0.86, 0.89, 0.91, 0.90]
     STUB_LATENCIES = [140, 145, 138, 152, 148, 141, 155, 160, 149, 144, 142, 147]
     for i in range(12):
+        logger.info("[CHUNK] Starting idx=%d frames=150 job_id=%s (stub)", i, job_id)
         await asyncio.sleep(1.2)
+        logger.info(
+            "[CHUNK] Done idx=%d bpm=%d sqi=%.2f latency_ms=%d failed=False reason=None job_id=%s (stub)",
+            i, STUB_BPMS[i], STUB_QUALITIES[i], STUB_LATENCIES[i], job_id,
+        )
         yield {
             "type": "chunk", "idx": i,
             "bpm": STUB_BPMS[i], "quality": STUB_QUALITIES[i],
             "latency_ms": STUB_LATENCIES[i],
             "failed": False, "reason": None,
         }
+    logger.info("[AGGREGATE] valid_chunks=12/12 overall_bpm=76 hrv_chunks=12 (stub)")
     yield {
         "type": "final",
         "overall_bpm": 76, "ci": 2, "respiratory_rate": 16,

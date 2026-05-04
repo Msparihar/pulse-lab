@@ -5,9 +5,14 @@ Serves the static React-via-CDN frontend and provides the SSE analyze endpoint.
 Set STUB_MODE=1 to skip model loading and emit deterministic fake data instead
 (useful for UI development without the heavy JAX / open-rppg install).
 """
+import asyncio
 import json
+import logging
 import os
 import shutil
+import sys
+import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,33 +32,66 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 
 STUB_MODE = os.environ.get("STUB_MODE") == "1"
 
+# ---------------------------------------------------------------------------
+# Logging setup — configure once here, before anything else runs.
+# We add a StreamHandler to stdout so Docker/Dokploy captures structured logs.
+# We do NOT touch uvicorn's own loggers (uvicorn, uvicorn.access, uvicorn.error)
+# so their output continues unmodified alongside ours.
+# ---------------------------------------------------------------------------
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(
+    logging.Formatter(
+        fmt="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+)
+
+# Apply to the root logger at WARNING so we don't swamp with library noise,
+# then set our own namespaces explicitly.
+logging.getLogger().setLevel(logging.WARNING)
+logging.getLogger().addHandler(_handler)
+
+for _ns in ("app.main", "app.pipeline"):
+    _lg = logging.getLogger(_ns)
+    _lg.setLevel(_log_level)
+    _lg.propagate = True  # bubbles up to root handler above
+
+logger = logging.getLogger("app.main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("[BOOT] Starting Pulse Lab v0.2.0 STUB_MODE=%s", STUB_MODE)
+
     if STUB_MODE:
-        print("STUB_MODE=1 — skipping model load, using fake_chunk_stream.")
+        logger.info("[BOOT] STUB_MODE=1 — skipping model load, using fake_chunk_stream.")
         app.state.model = None
     else:
         import numpy as np
 
-        print("Loading open-rppg model...")
+        logger.info("[BOOT] Loading FacePhys.rlap...")
+        t0 = time.perf_counter()
         import rppg  # noqa: PLC0415  (lazy import — heavy JAX deps)
 
         model = rppg.Model("FacePhys.rlap")
         app.state.model = model
+        logger.info("[BOOT] Model loaded in %dms", int((time.perf_counter() - t0) * 1000))
 
-        print("Warming up JAX (one-time ~5-10s)...")
+        logger.info("[BOOT] Starting JAX warmup...")
+        t1 = time.perf_counter()
         dummy = np.random.randint(0, 256, (60, 240, 320, 3), dtype=np.uint8)
         try:
             model.process_video_tensor(dummy, fps=30.0)
         except Exception as exc:
-            print(f"JAX warmup raised (ignored): {exc}")
-
-        print("Ready.")
+            logger.warning("[BOOT] JAX warmup raised (ignored): %s", exc)
+        logger.info("[BOOT] Warmup complete in %dms", int((time.perf_counter() - t1) * 1000))
 
     app.state.jobs = {}
     yield
-    print("Bye.")
+    logger.info("[BOOT] Shutdown — bye.")
 
 
 app = FastAPI(title="Pulse Lab", version="0.2.0", lifespan=lifespan)
@@ -91,6 +129,7 @@ async def analyze(file: UploadFile):
     dest.write_bytes(contents)
 
     # Validate minimum duration (30s floor)
+    duration = 0.0
     try:
         cap = cv2.VideoCapture(str(dest))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -110,6 +149,10 @@ async def analyze(file: UploadFile):
         pass
 
     app.state.jobs[job_id] = dest
+    logger.info(
+        "[JOB] Created job_id=%s from upload size=%d duration=%.1fs",
+        job_id, len(contents), duration,
+    )
     return {"job_id": job_id}
 
 
@@ -125,6 +168,7 @@ async def analyze_sample():
     dest = UPLOADS_DIR / f"{job_id}.mp4"
     shutil.copyfile(sample, dest)
     app.state.jobs[job_id] = dest
+    logger.info("[JOB] Created job_id=%s from sample", job_id)
     return {"job_id": job_id}
 
 
@@ -140,28 +184,71 @@ async def stream(job_id: str):
     """
     video_path: Path | None = app.state.jobs.get(job_id)
     if video_path is None or not video_path.exists():
+        logger.warning("[JOB] Stream NOT FOUND job_id=%s", job_id)
         raise HTTPException(status_code=404, detail="job_id not found")
 
+    logger.info("[JOB] Stream requested job_id=%s", job_id)
+    stream_t0 = time.time()
+
     async def event_generator():
+        logger.info("[SSE] Generator open job_id=%s", job_id)
+        reason = "done"
         try:
             if STUB_MODE:
-                source = fake_chunk_stream()
+                source = fake_chunk_stream(job_id=job_id)
             else:
-                source = real_chunk_stream(video_path, app.state.model)
+                source = real_chunk_stream(video_path, app.state.model, job_id=job_id)
 
             async for event in source:
                 event_type = event.pop("type")
                 data = json.dumps(event)
-                yield f"event: {event_type}\ndata: {data}\n\n"
+                payload = f"event: {event_type}\ndata: {data}\n\n"
+                # Log before yielding so we can tell if the yield itself blocks.
+                logger.info(
+                    "[SSE] Yielded event_type=%s idx=%s bytes=%d job_id=%s",
+                    event_type,
+                    event.get("idx", "-"),
+                    len(payload),
+                    job_id,
+                )
+                yield payload
+                # Give uvicorn/h11 a chance to flush the chunk to the TCP socket
+                # before we block on the next inference call. Without this, the
+                # coroutine may not yield control back to the event loop and the
+                # bytes sit in the kernel send buffer until the next yield.
+                await asyncio.sleep(0)
         except Exception as exc:
+            reason = "exception"
+            logger.error(
+                "[ERROR] %s: %s job_id=%s",
+                type(exc).__name__, exc, job_id,
+            )
+            logger.debug("[ERROR] Traceback:\n%s", traceback.format_exc())
             error_payload = json.dumps({"error": f"{type(exc).__name__}: {exc}"})
             yield f"event: error\ndata: {error_payload}\n\n"
+        finally:
+            total_s = time.time() - stream_t0
+            logger.info(
+                "[SSE] Generator closing job_id=%s reason=%s",
+                job_id, reason,
+            )
+            logger.info(
+                "[JOB] Stream finished job_id=%s total_seconds=%.1f",
+                job_id, total_s,
+            )
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            # no-transform: ask proxies not to modify (compress/buffer) the body.
+            # Buffering proxies (nginx gzip, Traefik middleware) can hold SSE
+            # chunks until their internal buffer fills, causing the "stuck at
+            # chunk 1" symptom. no-transform is the HTTP-level signal to skip that.
+            "Cache-Control": "no-cache, no-transform",
+            # keep-alive: tell downstream load-balancers not to close the
+            # connection on idle gaps between chunk events.
+            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )

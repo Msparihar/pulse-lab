@@ -93,13 +93,31 @@ function App() {
 
   /* --------- SSE machinery (shared by upload and sample paths) --------- */
   const openStream = useCallback((job_id) => {
-    const es = new EventSource(`/api/analyze/${job_id}/stream`);
+    const url = `/api/analyze/${job_id}/stream`;
+    console.info(`[SSE-FE] Opening stream job_id=${job_id} url=${url}`);
+    const es = new EventSource(url);
     esRef.current = es;
+
+    // Debug handle — lets you inspect es.readyState in DevTools console.
+    // Remove before public launch (debug-only).
+    window.__pulselab_es = es;
+
+    es.onopen = () => {
+      console.info(`[SSE-FE] Stream opened job_id=${job_id} ts=${Date.now()}`);
+    };
 
     es.addEventListener("chunk", (ev) => {
       const data = JSON.parse(ev.data);
+      console.debug(`[SSE-FE] chunk idx=${data.idx} bpm=${data.bpm} sqi=${data.quality} failed=${data.failed} ts=${Date.now()}`);
       setChunks((prev) => {
         const next = prev.slice();
+        if (data.idx < 0 || data.idx >= next.length) {
+          console.warn(`[SSE-FE] chunk idx=${data.idx} out of range [0,${next.length}) job_id=${job_id}`);
+          return prev;
+        }
+        if (next[data.idx].status === "done" || next[data.idx].status === "failed") {
+          console.warn(`[SSE-FE] chunk idx=${data.idx} is a duplicate (already ${next[data.idx].status}) job_id=${job_id}`);
+        }
         if (data.failed) {
           next[data.idx] = { ...next[data.idx], status: "failed", failReason: data.reason ?? "signal too noisy" };
         } else {
@@ -115,7 +133,9 @@ function App() {
 
     es.addEventListener("final", (ev) => {
       const d = JSON.parse(ev.data);
+      console.info(`[SSE-FE] final overall_bpm=${d.overall_bpm} ts=${Date.now()}`);
       setFinal(d);
+      console.info(`[SSE-FE] Closing job_id=${job_id}`);
       es.close();
       esRef.current = null;
       setView("results");
@@ -123,6 +143,8 @@ function App() {
 
     es.addEventListener("error", (ev) => {
       // Named 'error' SSE event from the server — genuine pipeline failure
+      console.warn(`[SSE-FE] server-error data=${ev.data}`);
+      console.info(`[SSE-FE] Closing job_id=${job_id}`);
       es.close();
       esRef.current = null;
       setView("failure");
@@ -130,6 +152,8 @@ function App() {
 
     es.onerror = () => {
       // Transport-level error (e.g., 404 for unknown job_id after server restart)
+      console.warn(`[SSE-FE] transport-error readyState=${es.readyState}`);
+      console.info(`[SSE-FE] Closing job_id=${job_id}`);
       es.close();
       esRef.current = null;
       if (activeJobRef.current) {
