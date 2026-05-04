@@ -31,6 +31,7 @@ function App() {
   const [final, setFinal]       = useState(null);     // final SSE payload
   const [failureMsg, setFailureMsg] = useState(null); // error message for failure card
   const [uploadMode, setUploadMode] = useState("sample"); // sample | upload | record
+  const [phase, setPhase]       = useState(null);     // "decoding" | "inference" | null
   const esRef = useRef(null);
   const activeJobRef = useRef(null); // tracks current job_id for popstate
 
@@ -62,6 +63,7 @@ function App() {
         setFinal(null);
         setFailureMsg(null);
         setUploadMode("sample");
+        setPhase(null);
       } else if (route.page === "analyze" && route.jobId !== activeJobRef.current) {
         // Navigated to a different job — attempt to open its stream.
         // If the server doesn't have it (restarted), the SSE 404 will trigger failure.
@@ -71,6 +73,7 @@ function App() {
         setChunks(buildInitialChunks().map((c, i) => i === 0 ? { ...c, status: "active" } : c));
         setCurrentIdx(0);
         setFinal(null);
+        setPhase(null);
         setFailureMsg(null);
         openStream(route.jobId);
       }
@@ -105,6 +108,12 @@ function App() {
     es.onopen = () => {
       console.info(`[SSE-FE] Stream opened job_id=${job_id} ts=${Date.now()}`);
     };
+
+    es.addEventListener("info", (ev) => {
+      const data = JSON.parse(ev.data);
+      console.info(`[SSE-FE] info phase=${data.phase} ts=${Date.now()}`);
+      setPhase(data.phase ?? null);
+    });
 
     es.addEventListener("chunk", (ev) => {
       const data = JSON.parse(ev.data);
@@ -175,6 +184,7 @@ function App() {
     setCurrentIdx(0);
     setFinal(null);
     setFailureMsg(null);
+    setPhase(null);
 
     // 1. Upload the file
     let job_id;
@@ -243,6 +253,7 @@ function App() {
     setCurrentIdx(0);
     setFinal(null);
     setFailureMsg(null);
+    setPhase(null);
     setFile({ name: "sample-face-60s.mp4", size: 1.1 * 1024 * 1024 });
 
     let job_id;
@@ -286,6 +297,7 @@ function App() {
     setFinal(null);
     setFailureMsg(null);
     setUploadMode("sample");
+    setPhase(null);
   }, []);
 
   const onCancel = resetToUpload;
@@ -318,6 +330,7 @@ function App() {
           bpm={runningAvg ?? 76}
           roiLost={false}
           showWaveform={false}
+          phase={phase}
         />
       )}
       {view === "results" && (

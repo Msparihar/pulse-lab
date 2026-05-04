@@ -200,6 +200,13 @@ async def stream(job_id: str):
         logger.info("[SSE] Generator open job_id=%s", job_id)
         reason = "done"
         try:
+            # Signal to the browser that we're decoding before any chunk arrives.
+            # This covers the 300-500ms gap between SSE open and the first chunk.
+            decoding_payload = 'event: info\ndata: {"phase": "decoding", "message": "Decoding video..."}\n\n'
+            logger.info("[SSE] Yielded event_type=info phase=decoding job_id=%s", job_id)
+            yield decoding_payload
+            await asyncio.sleep(0)
+
             if STUB_MODE:
                 source = fake_chunk_stream(job_id=job_id)
             else:
@@ -211,9 +218,10 @@ async def stream(job_id: str):
                 payload = f"event: {event_type}\ndata: {data}\n\n"
                 # Log before yielding so we can tell if the yield itself blocks.
                 logger.info(
-                    "[SSE] Yielded event_type=%s idx=%s bytes=%d job_id=%s",
+                    "[SSE] Yielded event_type=%s idx=%s phase=%s bytes=%d job_id=%s",
                     event_type,
                     event.get("idx", "-"),
+                    event.get("phase", "-"),
                     len(payload),
                     job_id,
                 )
@@ -223,6 +231,10 @@ async def stream(job_id: str):
                 # coroutine may not yield control back to the event loop and the
                 # bytes sit in the kernel send buffer until the next yield.
                 await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            reason = "client_disconnect"
+            logger.info("[SSE] Generator closing job_id=%s reason=client_disconnect", job_id)
+            raise
         except Exception as exc:
             reason = "exception"
             logger.error(
@@ -234,10 +246,12 @@ async def stream(job_id: str):
             yield f"event: error\ndata: {error_payload}\n\n"
         finally:
             total_s = time.time() - stream_t0
-            logger.info(
-                "[SSE] Generator closing job_id=%s reason=%s",
-                job_id, reason,
-            )
+            # client_disconnect already logged its own closing line in the except branch.
+            if reason != "client_disconnect":
+                logger.info(
+                    "[SSE] Generator closing job_id=%s reason=%s",
+                    job_id, reason,
+                )
             logger.info(
                 "[JOB] Stream finished job_id=%s total_seconds=%.1f",
                 job_id, total_s,

@@ -894,7 +894,7 @@ function LiveWaveform({ bpm = 76, frozen = false, height = 72, samples = [] }) {
   );
 }
 
-function ProcessingView({ file, chunks, runningAvg, currentIdx, total, onCancel, pulsePeriod, bpm, roiLost, showWaveform }) {
+function ProcessingView({ file, chunks, runningAvg, currentIdx, total, onCancel, pulsePeriod, bpm, roiLost, showWaveform, phase }) {
   return (
     <div className="card" data-screen-label="02 Processing">
       <div className="proc-head">
@@ -920,9 +920,11 @@ function ProcessingView({ file, chunks, runningAvg, currentIdx, total, onCancel,
       <div className="proc-status" style={{ marginTop: 0, marginBottom: 0 }}>
         <span>
           <span className="proc-status-dot"></span>
-          {currentIdx < total
-            ? <>Currently processing chunk <span className="tabular">{currentIdx + 1}</span> of <span className="tabular">{total}</span></>
-            : <>Finalizing…</>}
+          {phase === "decoding"
+            ? <>Decoding video…</>
+            : currentIdx < total
+              ? <>Currently processing chunk <span className="tabular">{currentIdx + 1}</span> of <span className="tabular">{total}</span></>
+              : <>Finalizing…</>}
         </span>
         <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
       </div>

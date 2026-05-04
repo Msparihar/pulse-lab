@@ -102,3 +102,54 @@ Numbers below are from a live end-to-end SSE trace (post-warmup, so no XLA compi
 - Webcam recording preview before submission: currently auto-submits after 60s.
   Adding a "Use this recording / Re-record" step would reduce accidental
   submissions of low-quality recordings
+
+## Post-mortem: SSE buffering bug + decode-latency fix (2026-05-04)
+
+**Symptom.** During the live demo, the processing screen stalled at "chunk 1 of
+12" for the full duration. The backend logs showed all 12 chunks completing on
+schedule; the browser saw nothing past the first event. Classic split-brain: the
+server thought it was streaming, the client thought it was waiting.
+
+**What I did during the call.** I didn't attempt a hot-fix. The risk of breaking
+the demo mid-presentation exceeded the value of the demo running. Instead I
+pivoted to local benchmark numbers and walked through the architecture — the
+pipeline design, the streaming model, the per-chunk BPM chart — using the numbers
+from a local run. That was the right call: a fumbled live fix would have consumed
+the remaining time and likely failed anyway.
+
+**Diagnosis.** After the call I instrumented both sides with structured tagged
+logs: `[BOOT]`, `[JOB]`, `[CHUNK]`, `[SSE]`, `[DECODE]` on the backend and
+`[SSE-FE]` on the frontend via `console.info`. Deployed, reproduced, and read the
+logs. The backend was yielding chunks in real-time — `[SSE] Yielded` entries
+appeared at 570ms intervals, total 13.7s end-to-end. The browser's `[SSE-FE]`
+logs showed chunk 0 landing immediately, then silence. The bug was therefore
+between the Python `yield` and the browser's `EventSource` — not in the
+application. Almost certainly Traefik buffering: the reverse proxy was holding
+chunks until its internal buffer filled or the stream closed, then flushing
+everything at once. Adding `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no` response headers resolved it.
+
+**Second issue, surfaced by the same logs.** Time-to-first-chunk was 5.4 seconds
+of dead air. The decoder was reading all 1800 frames into memory as a single
+NumPy array before any inference began. Peak RSS hit 414 MB. The streaming we
+advertised wasn't streaming at the decode layer — only at the inference layer.
+
+**Fix shipped.** Streaming chunk-by-chunk decode: `cv2.VideoCapture` is driven
+one 150-frame window at a time from a thread pool. Chunk N+1 decodes on the CPU
+while chunk N runs through JAX inference. Time-to-first-chunk dropped from 5.4s
+to ~0.4s (13x improvement). Peak memory dropped from 414 MB to ~35 MB per chunk
+in flight (12x). Expected total pipeline time: 12.4s → 7-8s. Both changes ship
+in the same commit.
+
+**Lesson.** Observability mattered more than the fix. Instrumenting the stack
+with tagged logs took about an hour. That hour turned "it's broken somewhere
+between the server and the browser" into a precise root cause — and surfaced the
+decode-latency problem as a free second finding from the same dataset. If I had
+shipped a speculative Traefik config change without the logs, I'd have fixed the
+buffering but never discovered the 5.4s dead air or the 414 MB memory spike.
+Production systems emit the truth; you just have to add the listeners.
+
+**Next steps.** Phase 2 is vmap batching — run all 12 chunks through JAX in a
+single batched call instead of sequentially. Target: ~3-4s total on CPU. After
+that, GPU for production scale (5-10x over CPU, straightforward with a CUDA
+instance).

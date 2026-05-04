@@ -326,6 +326,7 @@ async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> Asy
     chunk_results: list[dict] = []
     total_frames_decoded = 0
     i = 0
+    first_chunk = True
 
     while True:
         # Advance the decoder by one chunk (runs cv2 on the thread pool).
@@ -335,6 +336,12 @@ async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> Asy
             break
 
         total_frames_decoded += len(chunk_frames)
+
+        # Before chunk 0's inference, signal that decoding is done and inference
+        # is starting. The frontend uses this to update the status text.
+        if first_chunk:
+            first_chunk = False
+            yield {"type": "info", "phase": "inference"}
 
         # Inference for this chunk — also on thread pool, so decode of next
         # chunk can start immediately in the next loop iteration.
