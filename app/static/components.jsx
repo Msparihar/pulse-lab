@@ -159,10 +159,18 @@ function BrandMark({ size = 28 }) {
 /* ============================================================
    Header
    ============================================================ */
-function Header() {
+function Header({ onHome }) {
   return (
     <header className="header">
-      <div className="brand">
+      <div
+        className="brand"
+        role={onHome ? "button" : undefined}
+        tabIndex={onHome ? 0 : undefined}
+        onClick={onHome}
+        onKeyDown={onHome ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onHome(); } } : undefined}
+        style={onHome ? { cursor: "pointer" } : undefined}
+        aria-label={onHome ? "Pulse Lab — back to home" : undefined}
+      >
         <BrandMark/>
         <div>
           <div className="brand-name">Pulse Lab</div>

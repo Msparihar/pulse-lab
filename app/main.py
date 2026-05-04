@@ -33,37 +33,43 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 STUB_MODE = os.environ.get("STUB_MODE") == "1"
 
 # ---------------------------------------------------------------------------
-# Logging setup — configure once here, before anything else runs.
-# We add a StreamHandler to stdout so Docker/Dokploy captures structured logs.
-# We do NOT touch uvicorn's own loggers (uvicorn, uvicorn.access, uvicorn.error)
-# so their output continues unmodified alongside ours.
+# Logging setup — deferred to lifespan so we run AFTER Uvicorn installs its
+# own handlers, letting us clear them and install exactly one StreamHandler.
+# We define level/formatter here but apply them in lifespan._setup_logging().
 # ---------------------------------------------------------------------------
 _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
 
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(
-    logging.Formatter(
-        fmt="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+_formatter = logging.Formatter(
+    fmt="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
+    datefmt="%H:%M:%S",
 )
-
-# Apply to the root logger at WARNING so we don't swamp with library noise,
-# then set our own namespaces explicitly.
-logging.getLogger().setLevel(logging.WARNING)
-logging.getLogger().addHandler(_handler)
-
-for _ns in ("app.main", "app.pipeline"):
-    _lg = logging.getLogger(_ns)
-    _lg.setLevel(_log_level)
-    _lg.propagate = True  # bubbles up to root handler above
 
 logger = logging.getLogger("app.main")
 
 
+def _setup_logging() -> None:
+    """Install exactly one StreamHandler on the root logger.
+
+    Called at the top of lifespan so it runs after Uvicorn has already added
+    its own handlers, which we clear first to avoid duplicate lines.
+    """
+    root = logging.getLogger()
+    root.handlers.clear()          # remove Uvicorn's pre-existing handlers
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_formatter)
+    root.setLevel(logging.WARNING)
+    root.addHandler(handler)
+
+    for ns in ("app.main", "app.pipeline"):
+        lg = logging.getLogger(ns)
+        lg.setLevel(_log_level)
+        lg.propagate = True        # bubbles up to the single root handler
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _setup_logging()
     logger.info("[BOOT] Starting Pulse Lab v0.2.0 STUB_MODE=%s", STUB_MODE)
 
     if STUB_MODE:

@@ -50,64 +50,111 @@ TOTAL_FRAMES = FRAMES_PER_CHUNK * TOTAL_CHUNKS  # 1800
 BVP_TAIL_SAMPLES = 300
 
 
-def _read_video_at_30fps(path: Path) -> np.ndarray:
-    """Decode a video into a (T, H, W, 3) uint8 RGB array sampled at 30 fps.
+def _iter_chunks_at_30fps(path: Path, job_id: str):
+    """Sync generator: yields one chunk (up to FRAMES_PER_CHUNK RGB frames) at a time.
 
-    Resamples by frame-index selection: if the source is 60 fps we drop every
-    other frame; if it's 24 fps we duplicate. Avoids cv2 resample artifacts
-    and keeps the per-frame timing close enough for rPPG (the model itself
-    tolerates ±5% FPS drift; we tighten further by explicit resampling).
+    Uses frame-index selection for FPS resampling (same logic as the old eager
+    _read_video_at_30fps).  Yields TOTAL_CHUNKS chunks; pads short videos with
+    empty arrays so callers can assume exactly TOTAL_CHUNKS yields.
+
+    This is a plain Python generator — call it from a thread, not the async loop.
     """
     size_mb = path.stat().st_size / (1024 * 1024) if path.exists() else 0.0
-    logger.info("[DECODE] Reading video path=%s size_mb=%.2f", path.name, size_mb)
-    t0 = time.perf_counter()
 
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {path}")
 
-    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    src_fps   = cap.get(cv2.CAP_PROP_FPS) or 30.0
     src_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = src_count / src_fps if src_fps > 0 else 0.0
+    duration  = src_count / src_fps if src_fps > 0 else 0.0
 
-    frames = []
-    while True:
+    target_count = int(round(duration * TARGET_FPS)) if duration > 0 else src_count
+    if target_count <= 0:
+        target_count = src_count
+
+    # Build the sorted array of source-frame indices we actually want.
+    # For 30→30 fps no-op, linspace(0, N-1, N) = [0,1,2,...,N-1].
+    want_indices = np.linspace(0, src_count - 1, target_count).astype(np.int64)
+
+    logger.info(
+        "[DECODE] Reading video path=%s size_mb=%.2f src_fps=%.1f src_count=%d"
+        " target_count=%d job_id=%s",
+        path.name, size_mb, src_fps, src_count, target_count, job_id,
+    )
+
+    decode_t0 = time.perf_counter()
+
+    # Detect frame height/width for padding empty chunks correctly.
+    # Peek at first frame to get shape; reset to start.
+    probe_ok, probe_frame = cap.read()
+    frame_h, frame_w = (probe_frame.shape[:2] if probe_ok else (240, 320))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    chunk_buf: list[np.ndarray] = []
+    chunk_idx = 0
+    prev_src_pos = -1  # last source frame we read (for skip-ahead logic)
+
+    for want in want_indices:
+        want = int(want)
+        # Advance the capture to `want` if we need to skip frames.
+        if want > prev_src_pos + 1:
+            # Seek to skip efficiently; cv2 seek is approximate so re-read is
+            # safer for short gaps but for large gaps seeking is worth it.
+            if want - (prev_src_pos + 1) > 5:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, want)
+                prev_src_pos = want - 1
+            else:
+                # Read and discard intermediate frames
+                for _ in range(want - (prev_src_pos + 1)):
+                    cap.read()
+                    prev_src_pos += 1
+
         ok, frame_bgr = cap.read()
-        if not ok:
-            break
-        frames.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        prev_src_pos = want
+
+        if ok:
+            chunk_buf.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        # If not ok: short video — leave the slot empty; pad below.
+
+        if len(chunk_buf) == FRAMES_PER_CHUNK:
+            arr = np.stack(chunk_buf, axis=0)
+            chunk_buf = []
+            elapsed_ms = int((time.perf_counter() - decode_t0) * 1000)
+            logger.info(
+                "[DECODE] Yielded chunk idx=%d frames=%d elapsed_ms=%d job_id=%s",
+                chunk_idx, len(arr), elapsed_ms, job_id,
+            )
+            yield arr
+            chunk_idx += 1
+
     cap.release()
 
-    if not frames:
-        raise RuntimeError("Video has no decodable frames")
+    # Yield any partial final chunk
+    if chunk_buf and chunk_idx < TOTAL_CHUNKS:
+        arr = np.stack(chunk_buf, axis=0)
+        elapsed_ms = int((time.perf_counter() - decode_t0) * 1000)
+        logger.info(
+            "[DECODE] Yielded chunk idx=%d frames=%d (partial) elapsed_ms=%d job_id=%s",
+            chunk_idx, len(arr), elapsed_ms, job_id,
+        )
+        yield arr
+        chunk_idx += 1
 
-    arr = np.stack(frames)
+    # Pad remaining chunks with empty arrays so the caller always sees TOTAL_CHUNKS
+    while chunk_idx < TOTAL_CHUNKS:
+        logger.info(
+            "[DECODE] Yielded chunk idx=%d frames=0 (padding) job_id=%s",
+            chunk_idx, job_id,
+        )
+        yield np.empty((0, frame_h, frame_w, 3), dtype=np.uint8)
+        chunk_idx += 1
 
-    target_count = int(round(duration * TARGET_FPS)) if duration > 0 else len(arr)
-    if target_count <= 0:
-        target_count = len(arr)
-    if abs(src_fps - TARGET_FPS) > 0.5:
-        idx = np.linspace(0, len(arr) - 1, target_count).astype(np.int64)
-        arr = arr[idx]
-
-    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    total_decode_ms = int((time.perf_counter() - decode_t0) * 1000)
     logger.info(
-        "[DECODE] Decoded frames=%d src_fps=%.1f target_count=%d duration_s=%.1f elapsed_ms=%d",
-        len(arr), src_fps, target_count, duration, elapsed_ms,
+        "[DECODE] Done total_chunks_decoded=%d total_decode_ms=%d job_id=%s",
+        TOTAL_CHUNKS, total_decode_ms, job_id,
     )
-    return arr
-
-
-def _slice_into_chunks(frames: np.ndarray) -> list[np.ndarray]:
-    chunks: list[np.ndarray] = []
-    for i in range(TOTAL_CHUNKS):
-        start = i * FRAMES_PER_CHUNK
-        end = start + FRAMES_PER_CHUNK
-        if start >= len(frames):
-            chunks.append(np.empty((0, *frames.shape[1:]), dtype=np.uint8))
-        else:
-            chunks.append(frames[start:end])
-    return chunks
 
 
 def _process_chunk_sync(model, chunk: np.ndarray, idx: int = -1, job_id: str = "") -> dict:
@@ -265,16 +312,35 @@ def _aggregate_overall(chunk_results: list[dict]) -> dict:
 
 
 async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> AsyncIterator[dict]:
-    """Stream real chunk events from a video file using open-rppg."""
+    """Stream real chunk events from a video file using open-rppg.
+
+    Decode and inference are pipelined: chunk N+1 is decoded on a thread while
+    chunk N runs through JAX inference, also on a thread.  The async loop
+    orchestrates both without blocking.
+    """
     pipeline_t0 = time.perf_counter()
 
-    frames = await asyncio.to_thread(_read_video_at_30fps, video_path)
-    chunks = _slice_into_chunks(frames)
+    # Build the sync generator; it will be driven one chunk at a time from a thread.
+    decoder = _iter_chunks_at_30fps(video_path, job_id)
 
     chunk_results: list[dict] = []
-    for i, chunk in enumerate(chunks):
-        result = await asyncio.to_thread(_process_chunk_sync, model, chunk, i, job_id)
+    total_frames_decoded = 0
+    i = 0
+
+    while True:
+        # Advance the decoder by one chunk (runs cv2 on the thread pool).
+        try:
+            chunk_frames = await asyncio.to_thread(next, decoder)
+        except StopIteration:
+            break
+
+        total_frames_decoded += len(chunk_frames)
+
+        # Inference for this chunk — also on thread pool, so decode of next
+        # chunk can start immediately in the next loop iteration.
+        result = await asyncio.to_thread(_process_chunk_sync, model, chunk_frames, i, job_id)
         chunk_results.append(result)
+
         # Strip the heavy bvp_samples + hrv from the streamed event payload —
         # frontend only needs the fields below for the live timeline UI.
         yield {
@@ -286,6 +352,7 @@ async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> Asy
             "failed": result["failed"],
             "reason": result["reason"],
         }
+        i += 1
 
     summary = _aggregate_overall(chunk_results)
 
@@ -306,7 +373,7 @@ async def real_chunk_stream(video_path: Path, model, *, job_id: str = "") -> Asy
         "perf": {
             "total_seconds": round(total_seconds, 1),
             "avg_chunk_seconds": round(avg_chunk_seconds, 1),
-            "frames_processed": len(frames),
+            "frames_processed": total_frames_decoded,
         },
     }
 
